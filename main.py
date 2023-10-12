@@ -228,7 +228,8 @@ def connect_callback(frame):  # 回调接口 初始化当前Cash/总资产/持�
     portfolio_account = trade_client.get_prime_assets(base_currency='USD')
     CASH = portfolio_account.segments['S'].cash_available_for_trade
     NET_LIQUIDATION = portfolio_account.segments['S'].net_liquidation
-    position = trade_client.get_positions(account=client_config.account, sec_type=SecurityType.STK, currency='USD', market=Market.US)
+    position = trade_client.get_positions(account=client_config.account, sec_type=SecurityType.STK, currency='USD',
+                                          market=Market.US)
     if len(position) > 0:
         for pos in position:
             POSITION[pos.contract.symbol] = [pos.quantity, 0]
@@ -428,7 +429,8 @@ async def place_order(action, symbol, price, percentage=1.00):  # 盘中
                         if sellingQuantity > POSITION[symbol][0] if symbol in POSITION else 0:
                             sellingQuantity = POSITION[symbol][0] if symbol in POSITION else 0
                         order = market_order(account=client_config.account, contract=contract, action=action,
-                                             quantity=sellingQuantity, limit_price=round(price * 0.99995, 2))  # 实盘增加time_in_force = 'GTC'
+                                             quantity=sellingQuantity,
+                                             limit_price=round(price * 0.99995, 2))  # 实盘增加time_in_force = 'GTC'
 
                     else:
                         print("[盘后] 交易失败，当前没有", symbol, "的持仓")
@@ -514,7 +516,8 @@ async def postHourTradesHandling(trade_client, orders, unfilledPrice):
                                                          OrderStatus.REJECTED] and orders.remaining == orders.quantity:
                     logging.warning(
                         "[订单异常] %s, 标的：%s, 方向：%s, 持仓数量: %s, 实际交易数量：%s, 价格：%s, 时间：%s",
-                        orders.reason, orders.contract.symbol, orders.action, POSITION[orders.contract.symbol][0] if orders.contract.symbol in POSITION else 0,
+                        orders.reason, orders.contract.symbol, orders.action,
+                        POSITION[orders.contract.symbol][0] if orders.contract.symbol in POSITION else 0,
                         orders.quantity,
                         orders.limit_price, time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()))
                     return
@@ -580,12 +583,16 @@ async def order_filled(orders, unfilledPrice):
                 orders.action,
                 orders.avg_fill_price, orders.commission, round(orders.filled * orders.avg_fill_price, 2),
                 orders.quantity)
+            logging.warning(
+                "⬆｜订单｜标的: %s｜方向: %s｜数量: %s｜均价: $%s｜佣金: $%s｜成交额: %s｜市场状态: %s｜时间: %s｜⬆",
+                orders.contract.symbol, orders.action, orders.quantity, orders.avg_fill_price, orders.commission,
+                round(orders.filled * orders.avg_fill_price, 2), STATUS,
+                datetime.datetime.fromtimestamp(orders.trade_time / 1000))
 
             record_to_csv(
-                [STATUS, datetime.datetime.fromtimestamp(orders.trade_time / 1000), orders.contract.symbol,
-                 orders.action,
-                 orders.avg_fill_price, orders.commission, round(orders.filled * orders.avg_fill_price, 2), priceDiff,
-                 priceDiffPercentage, orders.id, orders.quantity])
+                [orders.contract.symbol, orders.action, orders.quantity, orders.avg_fill_price, orders.commission,
+                 round(orders.filled * orders.avg_fill_price, 2), STATUS,
+                 datetime.datetime.fromtimestamp(orders.trade_time / 1000), orders.id, priceDiff, priceDiffPercentage])
 
             print("----------------------------------")
             print("订单已成交.成交数量：", orders.filled, "out of", orders.quantity)
@@ -599,7 +606,8 @@ async def order_filled(orders, unfilledPrice):
 
             if orders.id in order_status:
                 del order_status[orders.id]
-            if orders.quantity == POSITION[orders.contract.symbol][0] == POSITION[orders.contract.symbol][1] and orders.action == 'SELL':
+            if orders.quantity == POSITION[orders.contract.symbol][0] == POSITION[orders.contract.symbol][
+                1] and orders.action == 'SELL':
                 print('old:', POSITION)
                 del POSITION[orders.contract.symbol]
                 print('new:', POSITION)
@@ -622,7 +630,7 @@ async def order_filled(orders, unfilledPrice):
 
 def record_to_csvTEST(data):
     try:
-        with open('All_Orders_Records.csv', 'a', newline='', encoding='utf-8') as csvfile:
+        with open('收到订单记录.csv', 'a', newline='', encoding='utf-8') as csvfile:
             writer = csv.writer(csvfile)
             writer.writerow(data)
     except Exception as e:
@@ -631,7 +639,7 @@ def record_to_csvTEST(data):
 
 def record_to_csv(data):
     try:
-        with open('Completed_Orders_Records.csv', 'a', newline='', encoding='utf-8') as csvfile:
+        with open('成交订单明细.csv', 'a', newline='', encoding='utf-8') as csvfile:
             writer = csv.writer(csvfile)
             writer.writerow(data)
     except Exception as e:
