@@ -40,7 +40,7 @@ order_status = {}  # 订单状态
 cash_lock = Lock()
 
 """
-实盘中需要的更新：
+需要的更新：
     1. 将LMT更新为永久GTC 
 
 待处理的问题：
@@ -56,7 +56,7 @@ cash_lock = Lock()
         出现反向开仓2 -> 已修复 原因：持仓数量改变 增加check_position 执行循环持仓检测 双重过滤叠加订单成交导致的数量改变
         
     
-对post-hour的预想更改：
+对post-hour的更改：
     1. 将盘后改单替换为postHourTradesHandling全自动改单。-> 已完成
     2. 针对盘后快速下跌的价格增加处理方案，防止踩雷。如果价格相比于上一次获取到的价格每分钟下跌了2.5% 且交易量大于1k的情况下再进行预设价格改单 -> 已完成
 """
@@ -590,8 +590,9 @@ async def order_filled(orders, unfilledPrice):
             print("----------------------------------")
             print("订单已成交.成交数量：", orders.filled, "out of", orders.quantity)
             print("订单完成时间: ", datetime.datetime.fromtimestamp(orders.trade_time / 1000))
-            print("成交均价：$", orders.avg_fill_price)
-            print("佣金：$", orders.commission)
+            print("总价格: USD $", orders.filled * orders.avg_fill_price)
+            print("成交均价：USD $", orders.avg_fill_price)
+            print("佣金：USD $", orders.commission)
             print("============== END ===============")
             print("")
             print("")
