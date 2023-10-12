@@ -315,7 +315,7 @@ async def check_open_order(trade_client, symbol, new_action, new_price, percenta
                     return False
                 if percentage == 1:
                     trade_client.cancel_order(id=order.id)
-                    logging.warning("%s,%s,%s 订单冲突，新旧订单均已取消(3)", log_prefix, symbol,
+                    logging.warning("%s %s,%s 订单冲突，新旧订单均已取消(3)", log_prefix, symbol,
                                     new_action)
                     return False
         elif new_action == 'BUY':
@@ -323,7 +323,7 @@ async def check_open_order(trade_client, symbol, new_action, new_price, percenta
     elif order.action == 'SELL' and new_action in {'BUY', 'SELL'}:
         if new_action == 'BUY':
             trade_client.cancel_order(id=order.id)
-            logging.warning("%s,%s,%s 订单冲突，旧订单已取消(4)", log_prefix, symbol, new_action)
+            logging.warning("%s %s,%s 订单冲突，旧订单已取消(4)", log_prefix, symbol, new_action)
             return True
         else:
             positions = trade_client.get_positions(account=client_config.account, sec_type=SecurityType.STK,
@@ -428,9 +428,9 @@ async def place_order(action, symbol, price, percentage=1.00):  # 盘中
                         sellingQuantity = int(math.ceil(quantity * percentage))
                         if sellingQuantity > POSITION[symbol][0] if symbol in POSITION else 0:
                             sellingQuantity = POSITION[symbol][0] if symbol in POSITION else 0
-                        order = market_order(account=client_config.account, contract=contract, action=action,
-                                             quantity=sellingQuantity,
-                                             limit_price=round(price * 0.99995, 2))  # 实盘增加time_in_force = 'GTC'
+                        order = limit_order(account=client_config.account, contract=contract, action=action,
+                                            quantity=sellingQuantity,
+                                            limit_price=round(price * 0.99995, 2))  # 实盘增加time_in_force = 'GTC'
 
                     else:
                         print("[盘后] 交易失败，当前没有", symbol, "的持仓")
@@ -513,7 +513,7 @@ async def postHourTradesHandling(trade_client, orders, unfilledPrice):
                     await order_filled(orders, unfilledPrice)
                     return
                 if order_status.get(orders.id, None) in [OrderStatus.CANCELLED, OrderStatus.EXPIRED,
-                                                         OrderStatus.REJECTED] and orders.remaining == orders.quantity:
+                                                         OrderStatus.REJECTED] and orders.remaining == orders.quantity and orders.reason != '改单成功':
                     logging.warning(
                         "[订单异常] %s, 标的：%s, 方向：%s, 持仓数量: %s, 实际交易数量：%s, 价格：%s, 时间：%s",
                         orders.reason, orders.contract.symbol, orders.action,
@@ -577,12 +577,7 @@ async def order_filled(orders, unfilledPrice):
                 priceDiffPercentage = round(priceDiff / unfilledPrice * 100, 4)
                 logging.warning("｜%s 滑点金额：$%s,｜滑点百分比：%s%%｜", orders.contract.symbol, priceDiff,
                                 priceDiffPercentage)
-            logging.warning(
-                "⬆｜订单成交｜市场状态: %s｜时间: %s｜标的: %s｜方向: %s｜均价: $%s｜佣金: $%s｜总成交额: %s｜数量: %s｜⬆",
-                STATUS, datetime.datetime.fromtimestamp(orders.trade_time / 1000), orders.contract.symbol,
-                orders.action,
-                orders.avg_fill_price, orders.commission, round(orders.filled * orders.avg_fill_price, 2),
-                orders.quantity)
+
             logging.warning(
                 "⬆｜订单｜标的: %s｜方向: %s｜数量: %s｜均价: $%s｜佣金: $%s｜成交额: %s｜市场状态: %s｜时间: %s｜⬆",
                 orders.contract.symbol, orders.action, orders.quantity, orders.avg_fill_price, orders.commission,
@@ -597,7 +592,7 @@ async def order_filled(orders, unfilledPrice):
             print("----------------------------------")
             print("订单已成交.成交数量：", orders.filled, "out of", orders.quantity)
             print("订单完成时间: ", datetime.datetime.fromtimestamp(orders.trade_time / 1000))
-            print("总价格: USD $", orders.filled * orders.avg_fill_price)
+            print("总成交额: USD $", orders.filled * orders.avg_fill_price)
             print("成交均价：USD $", orders.avg_fill_price)
             print("佣金：USD $", orders.commission)
             print("============== END ===============")
@@ -606,11 +601,10 @@ async def order_filled(orders, unfilledPrice):
 
             if orders.id in order_status:
                 del order_status[orders.id]
-            if orders.quantity == POSITION[orders.contract.symbol][0] == POSITION[orders.contract.symbol][
-                1] and orders.action == 'SELL':
-                print('old:', POSITION)
+            if orders.quantity == POSITION[orders.contract.symbol][0] == POSITION[orders.contract.symbol][1] and orders.action == 'SELL':
+                # print('old:', POSITION)
                 del POSITION[orders.contract.symbol]
-                print('new:', POSITION)
+                # print('new:', POSITION)
             break
 
         elif order_status.get(orders.id, None) in [OrderStatus.CANCELLED, OrderStatus.EXPIRED, OrderStatus.REJECTED]:
