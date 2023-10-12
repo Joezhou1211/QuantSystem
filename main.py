@@ -7,6 +7,7 @@ import time
 from datetime import timedelta
 from tigeropen.common.consts import Language, OrderStatus
 from tigeropen.push.pb.OrderStatusData_pb2 import OrderStatusData
+from tigeropen.push.pb.PositionData_pb2 import PositionData
 from tigeropen.tiger_open_config import TigerOpenClientConfig
 from tigeropen.common.util.signature_utils import read_private_key
 from tigeropen.trade.trade_client import TradeClient
@@ -37,7 +38,6 @@ CASH = 0.00  # 现金额
 NET_LIQUIDATION = 0.00  # 总价值
 order_status = {}  # 订单状态
 cash_lock = Lock()
-
 
 """
 实盘中需要的更新：
@@ -103,8 +103,8 @@ async def set_market_status():  # 按照预设时间更新市场状态
 
             current_weekday = current_time.weekday()
             current_only_time = current_time.time()
-            sec = 50  # 在这里修改秒
-            pre_open = t(17, 55, sec)
+            sec = 55  # 在这里修改秒
+            pre_open = t(17, 58, sec)
             trading_open = t(23, 29, sec)
             mid_night = t(00, 00, 00)
             post_open = t(5, 59, sec)
@@ -113,7 +113,7 @@ async def set_market_status():  # 按照预设时间更新市场状态
             if 0 <= current_weekday <= 4:  # 周一到周五
                 if pre_open <= current_only_time <= trading_open:
                     SET_STATUS = "PRE_HOUR_TRADING"
-                elif trading_open < current_only_time <= mid_night or mid_night <= current_only_time < post_open:
+                elif trading_open < current_only_time or current_only_time < post_open:
                     SET_STATUS = "TRADING"
                 elif post_open <= current_only_time <= day_close:
                     SET_STATUS = "POST_HOUR_TRADING"
@@ -223,15 +223,20 @@ protocol, host, port = client_config.socket_host_port
 push_client = PushClient(host, port, use_ssl=(protocol == 'ssl'), use_protobuf=True)
 
 
-def connect_callback(frame):  # 回调接口 初始化当前Cash和总资产
+def connect_callback(frame):  # 回调接口 初始化当前Cash/总资产/持仓
     global CASH, NET_LIQUIDATION
     trade_client = TradeClient(client_config)
     portfolio_account = trade_client.get_prime_assets(base_currency='USD')
     CASH = portfolio_account.segments['S'].cash_available_for_trade
     NET_LIQUIDATION = portfolio_account.segments['S'].net_liquidation
+    position = trade_client.get_positions(account=client_config.account, sec_type=SecurityType.STK, currency='USD', market=Market.US)
+    if len(position) > 0:
+        for pos in position:
+            POSITION[pos.contract.symbol] = [pos.quantity, 0]
     print('回调系统连接成功, 当前时间:', time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()), '市场状态：', STATUS)
-    print("可用现金额: $ USD", CASH)
-    print('总资产: $ USD', NET_LIQUIDATION)
+    print("可用现金额: USD $", CASH)
+    print('总资产: USD $', NET_LIQUIDATION)
+    print('当前持仓:', POSITION)
 
 
 def on_asset_changed(frame: AssetData):  # 回调接口 获取实时Cash和总资产
@@ -246,12 +251,28 @@ def on_order_changed(frame: OrderStatusData):  # 回调接口 获取实时订单
     order_status[frame.id] = status_enum
 
 
+def on_position_changed(frame: PositionData):
+    """
+    POSITION结构
+    [symbol][0] = 现有持仓 循环更新
+    [symbol][1] = 上次该标的下单的数量
+    """
+    # 检查symbol是否在POSITION中
+    if frame.symbol not in POSITION:
+        POSITION[frame.symbol] = [0, 0]  # 初始化为 [现有持仓, 上次下单数量]
+
+    # 更新现有持仓
+    POSITION[frame.symbol][0] = frame.position
+
+
 def start_listening():
     push_client.asset_changed = on_asset_changed
     push_client.order_changed = on_order_changed
+    push_client.position_changed = on_position_changed
     push_client.connect(client_config.tiger_id, client_config.private_key)
     push_client.subscribe_asset(account=client_config.account)
     push_client.subscribe_order(account=client_config.account)
+    push_client.subscribe_position(account=client_config.account)
 
 
 async def check_open_order(trade_client, symbol, new_action, new_price, percentage):
@@ -288,7 +309,7 @@ async def check_open_order(trade_client, symbol, new_action, new_price, percenta
             elif compare_price <= new_price:
                 if percentage < 1:
                     quantity = int(abs(percentage - 1) * order.quantity)
-                    logging.warning("%s %s %s 订单冲突，新旧订单已合并(2)，数量: %s -> %s", log_prefix, symbol,
+                    logging.warning("%s %s %s 新旧订单已合并(2)，数量: %s -> %s", log_prefix, symbol,
                                     new_action, order.quantity, quantity)
                     trade_client.modify_order(order=order, quantity=quantity, limit_price=order.limit_price)
                     return False
@@ -312,7 +333,7 @@ async def check_open_order(trade_client, symbol, new_action, new_price, percenta
             if quantity > positions[0].quantity:
                 quantity = positions[0].quantity
             trade_client.modify_order(order=order, quantity=quantity, limit_price=new_price)
-            logging.warning("%s %s %s 订单冲突, 新旧订单已合并(5), 数量: %s -> %s, 价格更改: %s -> %s",
+            logging.warning("%s %s %s 新旧订单已合并(5), 数量: %s -> %s, 价格更改: %s -> %s",
                             log_prefix, symbol,
                             new_action, order.quantity, quantity, order.limit_price, new_price)
             return False
@@ -330,7 +351,7 @@ async def place_order(action, symbol, price, percentage=1.00):  # 盘中
 
         if not await check_open_order(trade_client, symbol, action, price, percentage):  # 检查当前是否有未成交订单 如果有则挂起等待前一个成交
             return
-        max_buy = NET_LIQUIDATION * 0.2499
+        max_buy = NET_LIQUIDATION * 0.25
         max_quantity = int(max_buy // price)
         contract = stock_contract(symbol=symbol, currency='USD')
 
@@ -340,25 +361,29 @@ async def place_order(action, symbol, price, percentage=1.00):  # 盘中
                                      quantity=max_quantity)
 
             if action == "BUY" and CASH < max_buy:
-                logging.info("[盘中]买入 %s 失败，现金不足，时间：%s", symbol, time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()))
+                logging.info("[盘中]买入 %s 失败，现金不足，时间：%s", symbol,
+                             time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()))
                 print("[盘中]买入", symbol, " 失败，现金不足")
 
             if action == "SELL":
-                positions = trade_client.get_positions(account=client_config.account, sec_type=SecurityType.STK,
-                                                       currency='USD', market=Market.US,
-                                                       symbol=symbol)
-
-                if len(positions) > 0:
-                    if positions[0].quantity > 0:
-                        POSITION[symbol] = [positions[0].quantity, percentage]
+                try:
+                    quantity = POSITION[symbol][0] if symbol in POSITION else 0
+                    if quantity > 0:
+                        POSITION[symbol][1] = quantity  # 本次下单时的持仓数量
+                        sellingQuantity = int(math.ceil(quantity * percentage))
+                        if sellingQuantity > POSITION[symbol][0] if symbol in POSITION else 0:
+                            sellingQuantity = POSITION[symbol][0] if symbol in POSITION else 0
                         order = market_order(account=client_config.account, contract=contract, action=action,
-                                             quantity=int(math.ceil(positions[0].quantity * percentage)))
+                                             quantity=sellingQuantity)
 
-                else:
-                    print("[盘中] 交易失败，当前没有", symbol, "的持仓")
-                    logging.info("[盘中] 交易失败，当前没有 %s 的持仓", symbol)
-                    print("============== END ===============")
-                    return
+                    else:
+                        print("[盘中] 交易失败，当前没有", symbol, "的持仓")
+                        logging.info("[盘中] 交易失败，当前没有 %s 的持仓", symbol)
+                        print("============== END ===============")
+                        return
+
+                except Exception as e:
+                    logging.error("下单中断1，错误原因: %s", e)
 
             if order:
                 try:
@@ -375,9 +400,9 @@ async def place_order(action, symbol, price, percentage=1.00):  # 盘中
                          orders.quantity, STATUS])  # test
                     await order_filled(orders, unfilledPrice)
 
-                except Exception as error:
-                    logging.error("下单中断，错误原因: %s", error)
-                    print("下单中断，错误原因:", error)
+                except Exception as e:
+                    logging.error("下单中断2，错误原因: %s", e)
+                    print("下单中断2，错误原因:", e)
                     print("订单信息:", order)
                     print("标的", symbol)
             else:
@@ -390,28 +415,34 @@ async def place_order(action, symbol, price, percentage=1.00):  # 盘中
                                     limit_price=round(price, 2))
 
             if action == "BUY" and CASH < max_buy:
-                logging.info("[盘后]买入 %s 失败，现金不足，时间：%s", symbol, time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()))
+                logging.info("[盘后]买入 %s 失败，现金不足，时间：%s", symbol,
+                             time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()))
                 print("[盘后]买入", symbol, " 失败，现金不足")
 
             if action == "SELL":
-                positions = trade_client.get_positions(account=client_config.account, sec_type=SecurityType.STK,
-                                                       currency='USD', market=Market.US,
-                                                       symbol=symbol)
-                if len(positions) > 0:
-                    if positions[0].quantity > 0:
-                        POSITION[symbol] = [positions[0].quantity, percentage]
-                        order = limit_order(account=client_config.account, contract=contract, action=action,
-                                            quantity=int(math.ceil(positions[0].quantity * percentage)),
-                                            limit_price=round(price * 0.99995, 2))  # 实盘增加time_in_force = 'GTC'
 
-                else:
-                    print("[盘后] 交易失败，当前没有", symbol, "的持仓")
-                    logging.info("[盘后] 交易失败，当前没有 %s 的持仓", symbol)
-                    print("============== END ===============")
-                    return
+                try:
+                    quantity = POSITION[symbol][0] if symbol in POSITION else 0
+                    if quantity > 0:
+                        POSITION[symbol][1] = quantity  # 本次下单时的持仓数量
+                        sellingQuantity = int(math.ceil(quantity * percentage))
+                        if sellingQuantity > POSITION[symbol][0] if symbol in POSITION else 0:
+                            sellingQuantity = POSITION[symbol][0] if symbol in POSITION else 0
+                        order = market_order(account=client_config.account, contract=contract, action=action,
+                                             quantity=sellingQuantity,limit_price=round(price * 0.99995, 2)) # 实盘增加time_in_force = 'GTC'
+
+                    else:
+                        print("[盘后] 交易失败，当前没有", symbol, "的持仓")
+                        logging.info("[盘后] 交易失败，当前没有 %s 的持仓", symbol)
+                        print("============== END ===============")
+                        return
+
+                except Exception as e:
+                    logging.error("下单中断3，错误原因: %s", e)
 
             if order:
                 try:
+
                     order_id = trade_client.place_order(order)
                     print("[盘后]标的", symbol, "|", order.action, " 第 1 次下单, 成功。Price: $", price, "订单号:",
                           order_id)
@@ -422,11 +453,14 @@ async def place_order(action, symbol, price, percentage=1.00):  # 盘中
                     record_to_csvTEST(
                         [time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()), orders.contract.symbol, orders.action,
                          orders.quantity, STATUS])
-                    await asyncio.sleep(10)
+                    sleep_time = 10
+                    if not orders.remaining and order_status.get(orders.id, None) == OrderStatus.FILLED:
+                        sleep_time = 1
+                    await asyncio.sleep(sleep_time)
                     await postHourTradesHandling(trade_client, orders, unfilledPrice)
-                except Exception as error:
-                    logging.error("下单中断，错误原因: %s", error)
-                    print("下单中断，错误原因:", error)
+                except Exception as e:
+                    logging.error("下单中断4，错误原因: %s", e)
+                    print("下单中断4，错误原因:", e)
                     print("订单信息:", order)
                     print("标的", symbol)
             else:
@@ -437,30 +471,24 @@ async def place_order(action, symbol, price, percentage=1.00):  # 盘中
         raise e
 
 
-async def check_position(trade_client, orders):  # 循环检查position有没有变化 然后更改POSITION dict
-    positions = trade_client.get_positions(account=client_config.account, sec_type=SecurityType.STK,
-                                           currency='USD', market=Market.US,
-                                           symbol=orders.contract.symbol)
+async def check_position(orders):
     quantity = orders.quantity
     if order_status.get(orders.id, None) == OrderStatus.FILLED:  # 优先判断是否成交
         return quantity
-    if len(positions) < 1:  # 无持仓
+
+    position = POSITION[orders.contract.symbol][0] if orders.contract.symbol in POSITION else 0
+    if not position:  # 无持仓
         if orders.action == 'SELL':
             return False  # 跳出改单
         return quantity
 
-    # 结构POSITION[symbol] = [positions[0].quantity, percentage]
     # 有持仓 判断有没有变化
-    position = positions[0].quantity  # 实时仓位
-    originalPosition = POSITION[orders.contract.symbol][0]  # 记录仓位
-    percentage = POSITION[orders.contract.symbol][1]
+    originalPosition = POSITION[orders.contract.symbol][1] if orders.contract.symbol in POSITION else 0  # 记录仓位
 
-    if position != originalPosition and orders.action == 'SELL':  # 如果仓位变化了则更新卖出数量
-        POSITION[orders.contract.symbol][0] = position
-        quantity_to_sell = round(position * percentage)
-        if quantity_to_sell > position:
-            quantity_to_sell = position
-        return quantity_to_sell
+    if POSITION[orders.contract.symbol][0] < originalPosition and orders.action == 'SELL':  # 如果仓位变化了则更新卖出数量
+        if quantity > POSITION[orders.contract.symbol][0] if orders.contract.symbol in POSITION else 0:
+            quantity = POSITION[orders.contract.symbol][0] if orders.contract.symbol in POSITION else 0
+        return quantity
     return quantity  # 不改单
 
 
@@ -473,22 +501,24 @@ async def check_position(trade_client, orders):  # 循环检查position有没有
 async def postHourTradesHandling(trade_client, orders, unfilledPrice):
     trade_attempts = 2
     while True:
-        quantity = await check_position(trade_client, orders)
+        quantity = await check_position(orders)
         if not quantity:
             logging.warning("[出现错误]当前无 %s 持仓", orders.contract.symbol)
             return
 
         if STATUS == "POST_HOUR_TRADING" or STATUS == "PRE_HOUR_TRADING":
             try:
-                if order_status.get(orders.id, None) == OrderStatus.FILLED:
+                if not orders.remaining and order_status.get(orders.id, None) == OrderStatus.FILLED:
                     await order_filled(orders, unfilledPrice)
-                    break
-                if order_status.get(orders.id, None) in [OrderStatus.CANCELLED, OrderStatus.EXPIRED, OrderStatus.REJECTED]:
+                    return
+                if order_status.get(orders.id, None) in [OrderStatus.CANCELLED, OrderStatus.EXPIRED,
+                                                         OrderStatus.REJECTED] and orders.remaining == orders.quantity:
                     logging.warning(
                         "[订单异常] %s, 标的：%s, 方向：%s, 持仓数量: %s, 实际交易数量：%s, 价格：%s, 时间：%s",
-                        orders.reason, orders.contract.symbol, orders.action, POSITION[orders.contract.symbol][0],
+                        orders.reason, orders.contract.symbol, orders.action, POSITION[orders.contract.symbol][0] if orders.contract.symbol in POSITION else 0,
                         orders.quantity,
                         orders.limit_price, time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()))
+                    return
                 else:
                     symbol = orders.contract.symbol
                     if symbol in SYMBOLS:  # 检测标的
@@ -515,8 +545,9 @@ async def postHourTradesHandling(trade_client, orders, unfilledPrice):
                               " 次下单，失败。原因：该标的最新价格还未更新")
                         await asyncio.sleep(30)
             except Exception as e:
-                logging.warning("[盘后智能改单出现异常2]%s, 时间 %s", e,
+                logging.warning("[盘后智能改单出现异常]%s, 时间 %s", e,
                                 datetime.datetime.fromtimestamp(orders.trade_time / 1000))
+                return
         if STATUS == "TRADING":  # 盘前 没改成， 开盘了
             await postToTrading(orders, trade_client, trade_attempts, unfilledPrice)
             break
@@ -538,7 +569,7 @@ async def order_filled(orders, unfilledPrice):
     priceDiffPercentage = None
     i = 1
     while i < 100:
-        if order_status.get(orders.id, None) == OrderStatus.FILLED:
+        if not orders.remaining and order_status.get(orders.id, None) == OrderStatus.FILLED:
             if unfilledPrice != 0:
                 priceDiff = round(abs(orders.avg_fill_price - unfilledPrice), 4)
                 priceDiffPercentage = round(priceDiff / unfilledPrice * 100, 4)
@@ -565,15 +596,19 @@ async def order_filled(orders, unfilledPrice):
             print("============== END ===============")
             print("")
             print("")
+
             if orders.id in order_status:
                 del order_status[orders.id]
+            if orders.quantity == POSITION[orders.contract.symbol][0] == POSITION[orders.contract.symbol][1] and orders.action == 'SELL':
+                print('old:', POSITION)
+                del POSITION[orders.contract.symbol]
+                print('new:', POSITION)
             break
+
         elif order_status.get(orders.id, None) in [OrderStatus.CANCELLED, OrderStatus.EXPIRED, OrderStatus.REJECTED]:
             logging.warning("[订单出错]详情：%s", orders.reason)
-            print(order_status)
             if orders.id in order_status:
                 del order_status[orders.id]
-            print(order_status)
             break
         else:
             await asyncio.sleep(5)
@@ -610,7 +645,7 @@ async def postToTrading(orders, trade_client, trade_attempts, unfilledPrice):
     orders = trade_client.place_order(order)
     await asyncio.sleep(10)
     while True:
-        if order_status.get(orders.id, None) == OrderStatus.FILLED:
+        if not orders.remaining and order_status.get(orders.id, None) == OrderStatus.FILLED:
             logging.warning("[盘中智能改单]标的 %s|%s第 %s 次下单, 成功。修改为市价单类型",
                             orders.contract.symbol,
                             orders.action, trade_attempts)
