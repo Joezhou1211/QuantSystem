@@ -106,7 +106,6 @@ async def set_market_status():  # 按照预设时间更新市场状态
             sec = 55  # 在这里修改秒
             pre_open = t(17, 58, sec)
             trading_open = t(23, 29, sec)
-            mid_night = t(00, 00, 00)
             post_open = t(5, 59, sec)
             day_close = t(9, 59, 59)  # 固定
 
@@ -429,7 +428,7 @@ async def place_order(action, symbol, price, percentage=1.00):  # 盘中
                         if sellingQuantity > POSITION[symbol][0] if symbol in POSITION else 0:
                             sellingQuantity = POSITION[symbol][0] if symbol in POSITION else 0
                         order = market_order(account=client_config.account, contract=contract, action=action,
-                                             quantity=sellingQuantity,limit_price=round(price * 0.99995, 2)) # 实盘增加time_in_force = 'GTC'
+                                             quantity=sellingQuantity, limit_price=round(price * 0.99995, 2))  # 实盘增加time_in_force = 'GTC'
 
                     else:
                         print("[盘后] 交易失败，当前没有", symbol, "的持仓")
