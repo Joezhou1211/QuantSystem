@@ -406,8 +406,8 @@ async def place_order(action, symbol, price, percentage=1.00):  # 盘中
             orders = trade_client.get_order(id=order_id)
             order_status[order_id] = orders.status
             record_to_csvTEST(
-                [time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()), orders.contract.symbol, orders.action,
-                 orders.quantity, STATUS])  # test
+                [time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()), orders.contract.symbol, orders.action, price,
+                 orders.quantity, orders.id])  # test
 
             sleep_time = 10
             if not orders.remaining and order_status.get(orders.id, None) == OrderStatus.FILLED:
@@ -454,8 +454,8 @@ async def place_order(action, symbol, price, percentage=1.00):  # 盘中
             order_status[order_id] = orders.status  # 初始化订单状态
 
             record_to_csvTEST(
-                [time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()), orders.contract.symbol, orders.action,
-                 orders.quantity, STATUS])
+                [time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()), orders.contract.symbol, orders.action, price,
+                 orders.quantity, orders.id])
             sleep_time = 10
             if not orders.remaining and order_status.get(orders.id, None) == OrderStatus.FILLED:
                 sleep_time = 1
@@ -582,8 +582,8 @@ async def order_filled(orders, unfilledPrice):
                     datetime.datetime.fromtimestamp(orders.trade_time / 1000), orders.id, priceDiff,
                     priceDiffPercentage]
 
-            record_to_csv(data)
             csv_visualize_data(data)
+            record_to_csv(data + [orders.id])
 
             print("----------------------------------")
             print("订单已成交.成交数量：", orders.filled, "out of", orders.quantity)
