@@ -39,6 +39,7 @@ NET_LIQUIDATION = 0.00  # 总价值
 order_status = {}  # 订单状态
 cash_lock = Lock()
 
+
 """
 需要的更新：
     1. 将LMT更新为永久GTC 
@@ -64,7 +65,10 @@ cash_lock = Lock()
 
 def after_request(resp):
     resp.headers.pop('Content-Length', None)
-    resp.headers['Access-Control-Allow-Origin'] = '52.32.178.7,54.218.53.128,34.212.75.30,52.89.214.238'
+    resp.headers['Access-Control-Allow-Origin'] = '34.212.75.30,' \
+                                                  '52.32.178.7,' \
+                                                  '52.89.214.238,' \
+                                                  '54.218.53.128'
     resp.headers['Access-Control-Allow-Headers'] = 'Content-Type, application/json'
     resp.headers['Access-Control-Allow-Methods'] = 'POST'
     return resp
@@ -126,12 +130,12 @@ async def set_market_status():  # 按照预设时间更新市场状态
                     SET_STATUS = "TRADING"
                 elif post_open <= current_only_time < day_close:
                     SET_STATUS = "POST_HOUR_TRADING"
-                elif day_close <= current_only_time <= not_yet_open:
+                elif day_close <= current_only_time < not_yet_open:
                     SET_STATUS = "CLOSING"
                 else:
-                    SET_STATUS = "NOT_YET_OPEN"
+                    SET_STATUS = "MARKET_CLOSED"
             else:  # 周日
-                SET_STATUS = "CLOSING"
+                SET_STATUS = "MARKET_CLOSED"
 
             transition_times = [pre_open, trading_open, post_open, day_close]
             sleep_time = 60
