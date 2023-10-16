@@ -24,7 +24,8 @@ from tigeropen.push.pb.AssetData_pb2 import AssetData
 from tigeropen.push.push_client import PushClient
 from threading import Lock
 import os
-
+import smtplib
+from email.mime.text import MIMEText
 
 app = Flask(__name__)
 app.logger.disabled = True
@@ -40,7 +41,8 @@ NET_LIQUIDATION = 0.00  # 总价值
 order_status = {}  # 订单状态
 cash_lock = Lock()
 my_key = os.environ.get("MY_KEY")
-
+mail = 'joe' + os.environ.get('Email')
+mail_password = 'ecmc' + os.environ.get('PAS')
 
 """
 需要的更新：
@@ -509,6 +511,7 @@ async def check_position(orders):
 
 async def postHourTradesHandling(trade_client, orders, unfilledPrice):
     trade_attempts = 2
+    initial_price = orders.limit_price
     while True:
         quantity = await check_position(orders)
         if not quantity:
@@ -540,6 +543,8 @@ async def postHourTradesHandling(trade_client, orders, unfilledPrice):
                     else:
                         if (oldPrice - price) / oldPrice >= 0.2 and volume >= 1000:
                             price = round(price * 0.992, 2)  # 极端情况改单
+                            send_email(orders.contract.symbol, orders.action, orders.quantity, orders.limit_price)
+
                         trade_client.modify_order(orders, limit_price=price, quantity=quantity)
                         logging.warning("[盘后智能改单]标的 %s | %s第 %s 次下单, 成功。Price: $ %s -> $ %s",
                                         orders.contract.symbol, orders.action, trade_attempts,
@@ -570,10 +575,7 @@ async def postHourTradesHandling(trade_client, orders, unfilledPrice):
 
 async def order_filled(orders, unfilledPrice):
     """
-    测试完毕后在实盘中增加csv算法：在csv记录时对订单进行自动排列以便分析
-        在成功交易时将该标的存入一个list中，
-        buy：直接记录
-        sell：用order.symbol遍历之前成交的列表，寻找已经成交的该标的订单
+    添加一个
     """
     priceDiff = None
     priceDiffPercentage = None
@@ -596,7 +598,7 @@ async def order_filled(orders, unfilledPrice):
                     round(orders.filled * orders.avg_fill_price, 2), STATUS,
                     datetime.datetime.fromtimestamp(orders.trade_time / 1000), orders.id, priceDiff,
                     priceDiffPercentage]
-
+            send_email(data)  # test
             csv_visualize_data(data)
             record_to_csv(data + [orders.id])
 
@@ -609,6 +611,8 @@ async def order_filled(orders, unfilledPrice):
             print("============== END ===============")
             print("")
             print("")
+
+
 
             if orders.id in order_status:
                 del order_status[orders.id]
@@ -658,7 +662,7 @@ async def postToTrading(orders, trade_client, trade_attempts, unfilledPrice):
             await asyncio.sleep(5)  # 等到成交为止
 
 
-# ------------------------------------------------------------ CSV 算法 --------------------------------------------------------------------------------------------------------#
+# ------------------------------------------------------------ CSV算法 / 邮件功能 --------------------------------------------------------------------------------------------------------#
 
 def record_to_csvTEST(data):
     try:
@@ -766,6 +770,26 @@ def csv_visualize_data(record):
     save_positions(positions)
 
 
+def send_email(ticker, action, quantity, price):
+    gmail_user = mail
+
+    msg = MIMEText('Symbol：%s, \r\n方向：%s, \r\n数量: %s, \r\n初始价格: %s -> 当前价格: %s' % (ticker, action, quantity, price, SYMBOLS[ticker][0]))
+    msg['Subject'] = ('警告: %s 卖出失败，请立即检查订单状态！' % ticker)
+    msg['From'] = gmail_user
+    msg['To'] = 'joe.trading1016@gmail.com'  # 收件人邮箱
+
+    # 发送邮件
+    try:
+        server = smtplib.SMTP_SSL('smtp.gmail.com', 465)
+        server.ehlo()
+        server.login(gmail_user, mail_password)
+        server.sendmail(gmail_user, 'joe.trading1016@gmail.com', msg.as_string())
+        server.close()
+        logging.warning('邮件发送成功！时间: %s', time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()))
+    except Exception as e:
+        logging.warning('邮件发送失败: %s, 时间: %s', e, time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()))
+
+
 if __name__ == "__main__":
     logging.basicConfig(filename='app.log', level=logging.WARN)
     thread = Thread(target=run_asyncio_loop)
@@ -773,5 +797,4 @@ if __name__ == "__main__":
 
     push_client.connect_callback = connect_callback
     start_listening()
-
     app.run('0.0.0.0', 80)
