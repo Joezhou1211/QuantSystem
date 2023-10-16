@@ -9,7 +9,6 @@ from tigeropen.common.consts import Language, OrderStatus
 from tigeropen.push.pb.OrderStatusData_pb2 import OrderStatusData
 from tigeropen.push.pb.PositionData_pb2 import PositionData
 from tigeropen.tiger_open_config import TigerOpenClientConfig
-from tigeropen.common.util.signature_utils import read_private_key
 from tigeropen.trade.trade_client import TradeClient
 from tigeropen.common.consts import (Market, SecurityType)
 from tigeropen.common.util.contract_utils import stock_contract
@@ -24,6 +23,8 @@ from tigeropen.quote.quote_client import QuoteClient
 from tigeropen.push.pb.AssetData_pb2 import AssetData
 from tigeropen.push.push_client import PushClient
 from threading import Lock
+import os
+
 
 app = Flask(__name__)
 app.logger.disabled = True
@@ -38,6 +39,7 @@ CASH = 0.00  # 现金额
 NET_LIQUIDATION = 0.00  # 总价值
 order_status = {}  # 订单状态
 cash_lock = Lock()
+my_key = os.environ.get("MY_KEY")
 
 
 """
@@ -107,35 +109,44 @@ async def set_market_status():  # 按照预设时间更新市场状态
 
             current_weekday = current_time.weekday()
             current_only_time = current_time.time()
-            sec = 55  # 在这里修改秒
-            pre_open = t(17, 58, sec)
+            sec = 59  # 在这里修改秒
+            pre_open = t(17, 59, sec)
             trading_open = t(23, 29, sec)
             post_open = t(5, 59, sec)
             day_close = t(9, 59, 59)  # 固定
             not_yet_open = t(14, 00, 00)
 
-            if 0 <= current_weekday <= 4:  # 周一到周五
-                if pre_open <= current_only_time <= trading_open:
-                    SET_STATUS = "PRE_HOUR_TRADING"
-                elif trading_open < current_only_time or current_only_time < post_open:
-                    SET_STATUS = "TRADING"
-                elif post_open <= current_only_time < day_close:
-                    SET_STATUS = "POST_HOUR_TRADING"
-                elif day_close <= current_only_time <= not_yet_open:
-                    SET_STATUS = "CLOSING"
-                else:
-                    SET_STATUS = "NOT_YET_OPEN"
-            elif current_weekday == 5:  # 周六
-                if current_only_time < post_open:
-                    SET_STATUS = "TRADING"
-                elif post_open <= current_only_time < day_close:
-                    SET_STATUS = "POST_HOUR_TRADING"
-                elif day_close <= current_only_time < not_yet_open:
-                    SET_STATUS = "CLOSING"
-                else:
+            if current_weekday == 0:  # 周一
+                if current_only_time < not_yet_open:  # 0:00 - 17:59
                     SET_STATUS = "MARKET_CLOSED"
+                elif not_yet_open <= current_only_time <= pre_open:  # 18:00 - 17:59
+                    SET_STATUS = "NOT_YET_OPEN"
+                elif pre_open <= current_only_time <= trading_open:  # 18:00 - 23:29
+                    SET_STATUS = "PRE_HOUR_TRADING"
+                elif trading_open < current_only_time < t(23, 59, 59):  # 23:30 - 23:59:59
+                    SET_STATUS = "TRADING"
+            elif 1 <= current_weekday <= 4:  # 周二到周五
+                if pre_open <= current_only_time <= trading_open:  # 18:00 - 23:29
+                    SET_STATUS = "PRE_HOUR_TRADING"
+                elif trading_open < current_only_time or current_only_time < post_open:  # 23:30 - 5:59
+                    SET_STATUS = "TRADING"
+                elif post_open <= current_only_time < day_close:  # 6:00 - 9:59
+                    SET_STATUS = "POST_HOUR_TRADING"
+                elif day_close <= current_only_time <= not_yet_open:  # 10:00 - 13:59
+                    SET_STATUS = "CLOSING"
+                else:
+                    SET_STATUS = "NOT_YET_OPEN"  # 14:00 - 17:59
+            elif current_weekday == 5:  # 周六
+                if current_only_time < post_open:  # 0:00 - 5:59
+                    SET_STATUS = "TRADING"
+                elif post_open <= current_only_time < day_close:  # 6:00 - 9:59
+                    SET_STATUS = "POST_HOUR_TRADING"
+                elif day_close <= current_only_time < not_yet_open:  # 10:00 - 13:59
+                    SET_STATUS = "CLOSING"
+                else:
+                    SET_STATUS = "MARKET_CLOSED"  # 14:00 - 23:59
             else:  # 周日
-                SET_STATUS = "MARKET_CLOSED"
+                SET_STATUS = "MARKET_CLOSED"  # 0:00 - 23:59
 
             transition_times = [pre_open, trading_open, post_open, day_close]
             sleep_time = 60
@@ -219,7 +230,7 @@ def priceAndVolume(timestamp, symbol, price, volume):
 
 def get_client_config():
     client_configs = TigerOpenClientConfig()
-    client_configs.private_key = read_private_key('mykey.pem')
+    client_configs.private_key = my_key
     client_configs.tiger_id = '20152364'
     client_configs.account = '20230418022309393'
     client_configs.language = Language.zh_CN
