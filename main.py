@@ -543,7 +543,7 @@ async def postHourTradesHandling(trade_client, orders, unfilledPrice):
                     else:
                         if (oldPrice - price) / oldPrice >= 0.2 and volume >= 1000:
                             price = round(price * 0.992, 2)  # 极端情况改单
-                            send_email(orders.contract.symbol, orders.action, orders.quantity, orders.limit_price)
+                            send_email(orders.contract.symbol, orders.action, orders.quantity, initial_price)
 
                         trade_client.modify_order(orders, limit_price=price, quantity=quantity)
                         logging.warning("[盘后智能改单]标的 %s | %s第 %s 次下单, 成功。Price: $ %s -> $ %s",
@@ -575,7 +575,7 @@ async def postHourTradesHandling(trade_client, orders, unfilledPrice):
 
 async def order_filled(orders, unfilledPrice):
     """
-    添加一个
+    x
     """
     priceDiff = None
     priceDiffPercentage = None
@@ -598,7 +598,7 @@ async def order_filled(orders, unfilledPrice):
                     round(orders.filled * orders.avg_fill_price, 2), STATUS,
                     datetime.datetime.fromtimestamp(orders.trade_time / 1000), orders.id, priceDiff,
                     priceDiffPercentage]
-            send_email(data)  # test
+
             csv_visualize_data(data)
             record_to_csv(data + [orders.id])
 
@@ -611,8 +611,6 @@ async def order_filled(orders, unfilledPrice):
             print("============== END ===============")
             print("")
             print("")
-
-
 
             if orders.id in order_status:
                 del order_status[orders.id]
@@ -770,15 +768,14 @@ def csv_visualize_data(record):
     save_positions(positions)
 
 
-def send_email(ticker, action, quantity, price):
+def send_email(ticker, action, quantity, initial_price):
     gmail_user = mail
 
-    msg = MIMEText('Symbol：%s, \r\n方向：%s, \r\n数量: %s, \r\n初始价格: %s -> 当前价格: %s' % (ticker, action, quantity, price, SYMBOLS[ticker][0]))
+    msg = MIMEText('Symbol：%s, \r\n方向：%s, \r\n数量: %s, \r\n初始价格: %s -> 当前价格: %s' % (ticker, action, quantity, initial_price, SYMBOLS[ticker][0]))
     msg['Subject'] = ('警告: %s 卖出失败，请立即检查订单状态！' % ticker)
     msg['From'] = gmail_user
     msg['To'] = 'joe.trading1016@gmail.com'  # 收件人邮箱
 
-    # 发送邮件
     try:
         server = smtplib.SMTP_SSL('smtp.gmail.com', 465)
         server.ehlo()
