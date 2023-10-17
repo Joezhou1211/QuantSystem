@@ -47,6 +47,7 @@ mail_password = 'ecmc' + os.environ.get('PAS')
 """
 需要的更新：
     1. 将LMT更新为永久GTC 
+    2. 将现有订单升级为Queue base的排序系统
 
 待处理的问题：
     1. 并发数据同时进入function 无法处理 需要线程排布 -> 更改获取盘口的方式 v2 已修复 
@@ -278,7 +279,7 @@ def on_order_changed(frame: OrderStatusData):  # 回调接口 获取实时订单
     order_status[frame.id] = status_enum
 
 
-def on_position_changed(frame: PositionData):
+def on_position_changed(frame: PositionData):  # 回调接口 获取实时持仓
     """
     POSITION结构
     [symbol][0] = 现有持仓 循环更新
@@ -319,62 +320,86 @@ async def check_open_order(trade_client, symbol, new_action, new_price, percenta
     :returns
     True -> 无事发生
     False -> 主程序中断新订单
+    order -> 取消的订单 检查状态
+
+    logging格式均为[方向][数量][价格]
+
+    因为市价单盘中无法获取实时价格，导致order对象不存在order.limit_price参数，
+    在模拟中使用1分钟线会出现盘中下单过快导致和有关limit_price的操作全部异常。 -> 已解决 根据盘口创建判断条件
     """
-    open_orders = trade_client.get_open_orders(symbol=symbol)  # 检查这个open_orders是否包含部分成交订单
+    open_orders = trade_client.get_open_orders(symbol=symbol)
     if not open_orders:
-        return True
+        return True, None
     order = open_orders[0]
     is_trading_hour = STATUS == "TRADING"
     log_prefix = "[盘中]" if is_trading_hour else "[盘后]"
+
+    holding = POSITION[symbol][0] if symbol in POSITION else 0  # 获取标的现有持仓
+    sellingQuantity = int(math.ceil(holding * percentage))  # 计算新订单卖出数量
+    if sellingQuantity > POSITION[symbol][0] if symbol in POSITION else 0:
+        sellingQuantity = POSITION[symbol][0] if symbol in POSITION else 0
+
+    compare_price = order.latest_price if is_trading_hour else order.limit_price
+    old_order_price = compare_price  # 以市价单下单时的价格作为输出
+    if not is_trading_hour:
+        old_order_price = order.limit_price
+
     if order.action == 'BUY':
         if new_action == 'SELL':
-            compare_price = order.latest_price if is_trading_hour else order.limit_price
-            if compare_price > new_price:
+            if compare_price > new_price:  # 1 取消两个订单
                 trade_client.cancel_order(id=order.id)
-                logging.warning("%s %s, %s 订单冲突，新旧订单均已取消(1)", log_prefix, symbol, new_action)
-                order = trade_client.get_order(order.id)
-                logging.warning("(1)旧订单最新数据监控: %s, 状态: %s", order.contract.symbol, order.status)
-                return False
+                logging.warning(
+                    "%s, %s, 旧订单%s, %s, %s与新进请求%s, %s, %s冲突，两个订单均被取消. 时间: %s, ref = (1)",
+                    log_prefix, symbol, order.action, order.quantity, old_order_price, new_action, sellingQuantity,
+                    new_price, time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()))
+                return False, order
+
             elif compare_price <= new_price:
-                if percentage < 1:
+                if percentage < 1:  # 2 仅改变数量
                     quantity = int(abs(percentage - 1) * order.quantity)
-                    logging.warning("%s %s, %s 新旧订单已合并(2)，旧订单数量: %s -> %s", log_prefix, symbol,
-                                    new_action, order.quantity, quantity)
+                    logging.warning(
+                        "%s, %s, 旧订单%s, %s, %s与新进请求%s, %s, %s冲突，已合并为新订单->%s, %s, %s. 时间: %s, ref = (2)",
+                        log_prefix, symbol,
+                        order.action, order.quantity, old_order_price,
+                        new_action, sellingQuantity, new_price,
+                        order.action, quantity, old_order_price,
+                        time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()))
                     trade_client.modify_order(order=order, quantity=quantity, limit_price=order.limit_price)
-                    order = trade_client.get_order(order.id)
-                    logging.warning("(2)旧订单最新数据监控: %s, 数量: %s", order.contract.symbol, order.quantity)
-                    return False
-                if percentage == 1:
+                    return False, order
+
+                if percentage == 1:  # 3 取消两个订单
                     trade_client.cancel_order(id=order.id)
-                    logging.warning("%s %s, %s 订单冲突，新旧订单均已取消(3)", log_prefix, symbol,
-                                    new_action)
-                    order = trade_client.get_order(order.id)
-                    logging.warning("(3)旧订单最新数据监控: %s, 状态: %s", order.contract.symbol, order.status)
-                    return False
+                    logging.warning(
+                        "%s, %s, 旧订单%s, %s, %s与新进请求%s, %s, %s冲突，两个订单均被取消. 时间: %s, ref = (3)",
+                        log_prefix, symbol, order.action, order.quantity, old_order_price, new_action, sellingQuantity,
+                        new_price, time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()))
+                    return False, order
+
         elif new_action == 'BUY':
-            return True
+            return True, None  # 只有 buy->buy 返回None
+
     elif order.action == 'SELL' and new_action in {'BUY', 'SELL'}:
-        if new_action == 'BUY':
+        if new_action == 'BUY':  # 4 仅取消旧订单
             trade_client.cancel_order(id=order.id)
-            logging.warning("%s %s, %s 订单冲突，旧订单已取消(4)", log_prefix, symbol, new_action)
-            order = trade_client.get_order(order.id)
-            logging.warning("(4)旧订单最新数据监控: %s, 状态: %s", order.contract.symbol, order.status)
-            return True
-        else:
-            positions = trade_client.get_positions(account=client_config.account, sec_type=SecurityType.STK,
-                                                   currency='USD', market=Market.US, symbol=symbol)
-            newQuantity = int(math.ceil(positions[0].quantity * percentage))
-            quantity = order.quantity + newQuantity
-            if quantity > positions[0].quantity:
-                quantity = positions[0].quantity
+            quantity = int((NET_LIQUIDATION * 0.25) // new_price)
+            logging.warning(
+                "%s, %s, 旧订单%s, %s, %s与新进请求%s, %s, %s冲突，旧订单已被取消. 时间: %s, ref = (4)",
+                log_prefix, symbol, order.action, order.quantity, old_order_price, new_action, quantity,
+                new_price, time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()))
+            return True, order
+        else:  # 5 仅取消旧订单
+            quantity = order.quantity + sellingQuantity
+            if quantity > POSITION[symbol][0] if symbol in POSITION else 0:
+                quantity = POSITION[symbol][0] if symbol in POSITION else 0
             trade_client.modify_order(order=order, quantity=quantity, limit_price=new_price)
-            logging.warning("%s %s, %s 新旧订单已合并(5), 数量: %s -> %s, 价格更改: %s -> %s",
-                            log_prefix, symbol,
-                            new_action, order.quantity, quantity, order.limit_price, new_price)
-            order = trade_client.get_order(order.id)
-            logging.warning("(5)旧订单最新数据监控: %s, 数量: %s, 价格: %s", order.contract.symbol, order.quantity,
-                            order.limit_price)
-            return False
+            logging.warning(
+                "%s, %s, 旧订单%s, %s, %s与新进请求%s, %s, %s冲突，已合并为新订单->%s, %s, %s. 时间: %s, ref = (5)",
+                log_prefix, symbol,
+                order.action, order.quantity, old_order_price,
+                new_action, sellingQuantity, new_price,
+                order.action, quantity, new_price,
+                time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()))
+            return False, order
 
 
 async def place_order(action, symbol, price, percentage=1.00):  # 盘中
@@ -386,8 +411,23 @@ async def place_order(action, symbol, price, percentage=1.00):  # 盘中
     percentage = float(percentage)
     order = None
 
-    if not await check_open_order(trade_client, symbol, action, price, percentage):  # 检查当前是否有未成交订单 如果有则挂起等待前一个成交
+    checker, old_order = await check_open_order(trade_client, symbol, action, price, percentage)
+    if old_order:  # 如果有订单回传则检查其状态 必须是取消才能下一步 避免订单冲突
+        i = 0
+        while old_order.status != OrderStatus.CANCELLED:
+            old_order = trade_client.get_order(id=old_order.id)
+            if i == 60:
+                logging.warning("旧订单取消出现问题%s", old_order)
+                return
+            await asyncio.sleep(1)
+            i += 1
+        logging.warning("旧订单已取消，%s %s,订单最后更新时间: %s, 下单时间: %s, 订单号:%s", old_order.action,
+                        old_order.quantity, datetime.datetime.fromtimestamp(old_order.update_time / 1000),
+                        datetime.datetime.fromtimestamp(old_order.order_time / 1000), old_order.id)
+
+    if not checker:  # 检查当前是否有未成交订单 如果有则挂起等待前一个成交
         return
+
     max_buy = NET_LIQUIDATION * 0.25
     max_quantity = int(max_buy // price)
     contract = stock_contract(symbol=symbol, currency='USD')
@@ -774,7 +814,8 @@ def csv_visualize_data(record):
 def send_email(ticker, action, quantity, initial_price):
     gmail_user = mail
 
-    msg = MIMEText('Symbol：%s, \r\n方向：%s, \r\n数量: %s, \r\n初始价格: %s -> 当前价格: %s' % (ticker, action, quantity, initial_price, SYMBOLS[ticker][0]))
+    msg = MIMEText('Symbol：%s, \r\n方向：%s, \r\n数量: %s, \r\n初始价格: %s -> 当前价格: %s' % (
+        ticker, action, quantity, initial_price, SYMBOLS[ticker][0]))
     msg['Subject'] = ('警告: %s 卖出失败，请立即检查订单状态！' % ticker)
     msg['From'] = gmail_user
     msg['To'] = 'joe.trading1016@gmail.com'  # 收件人邮箱
