@@ -259,7 +259,10 @@ def connect_callback(frame):  # 回调接口 初始化当前Cash/总资产/持�
     print('回调系统连接成功, 当前时间:', time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()), '市场状态：', STATUS)
     print("可用现金额: USD $", CASH)
     print('总资产: USD $', NET_LIQUIDATION)
-    print('当前持仓:', POSITION)
+    if not POSITION:
+        print('当前无持仓')
+    else:
+        print('当前持仓:', POSITION)
     print("============================================================================")
 
 
