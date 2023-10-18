@@ -403,6 +403,7 @@ async def check_open_order(trade_client, symbol, new_action, new_price, percenta
 
 
 async def place_order(action, symbol, price, percentage=1.00):  # 盘中
+    record_to_csvTEST2([action, symbol, price, percentage, time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())])
     global POSITION
     unfilledPrice = 0
     trade_client = TradeClient(client_config)
@@ -431,7 +432,7 @@ async def place_order(action, symbol, price, percentage=1.00):  # 盘中
             await order_filled(old_order, unfilledPrice)
             return
 
-    if not checker:  # 检查当前是否有未成交订单 如果有则挂起等待前一个成交
+    if not checker:
         return
 
     max_buy = NET_LIQUIDATION * 0.25
@@ -481,6 +482,7 @@ async def place_order(action, symbol, price, percentage=1.00):  # 盘中
             await asyncio.sleep(sleep_time)
             await order_filled(orders, unfilledPrice)
         else:
+            logging.warning("下单失败，订单为空, 时间: %s", time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()))
             return
 
     if STATUS == "POST_HOUR_TRADING" or STATUS == "PRE_HOUR_TRADING":
@@ -528,6 +530,7 @@ async def place_order(action, symbol, price, percentage=1.00):  # 盘中
             await asyncio.sleep(sleep_time)
             await postHourTradesHandling(trade_client, orders, unfilledPrice)
         else:
+            logging.warning("下单失败，订单为空, 时间: %s", time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()))
             return
 
 
@@ -728,6 +731,14 @@ def record_to_csv(data):
     except Exception as e:
         logging.warning("记录失败：%s", e)
 
+
+def record_to_csvTEST2(data):
+    try:
+        with open('所有收到订单追踪.csv', 'a', newline='', encoding='utf-8') as csvfile:
+            writer = csv.writer(csvfile)
+            writer.writerow(data)
+    except Exception as e:
+        logging.warning("记录失败：%s", e)
 
 def load_positions():
     try:
