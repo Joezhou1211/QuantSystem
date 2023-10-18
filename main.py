@@ -329,7 +329,7 @@ async def check_open_order(trade_client, symbol, new_action, new_price, percenta
     """
     open_orders = trade_client.get_open_orders(symbol=symbol)
     if not open_orders:
-        return True, None
+        return True, None, None
     order = open_orders[0]
     is_trading_hour = STATUS == "TRADING"
     log_prefix = "[盘中]" if is_trading_hour else "[盘后]"
@@ -352,7 +352,7 @@ async def check_open_order(trade_client, symbol, new_action, new_price, percenta
                     "%s, %s, 旧订单%s, %s, %s与新进请求%s, %s, %s冲突，两个订单均被取消. 时间: %s, ref = (1)",
                     log_prefix, symbol, order.action, order.quantity, old_order_price, new_action, sellingQuantity,
                     new_price, time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()))
-                return False, order
+                return False, order, 'CANCEL'
 
             elif compare_price <= new_price:
                 if percentage < 1:  # 2 仅改变数量
@@ -365,7 +365,7 @@ async def check_open_order(trade_client, symbol, new_action, new_price, percenta
                         order.action, quantity, old_order_price,
                         time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()))
                     trade_client.modify_order(order=order, quantity=quantity, limit_price=order.limit_price)
-                    return False, order
+                    return False, order, 'MODIFY'
 
                 if percentage == 1:  # 3 取消两个订单
                     trade_client.cancel_order(id=order.id)
@@ -373,10 +373,10 @@ async def check_open_order(trade_client, symbol, new_action, new_price, percenta
                         "%s, %s, 旧订单%s, %s, %s与新进请求%s, %s, %s冲突，两个订单均被取消. 时间: %s, ref = (3)",
                         log_prefix, symbol, order.action, order.quantity, old_order_price, new_action, sellingQuantity,
                         new_price, time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()))
-                    return False, order
+                    return False, order, 'CANCEL'
 
         elif new_action == 'BUY':
-            return True, None  # 只有 buy->buy 返回None
+            return True, None, None  # 只有 buy->buy 返回None
 
     elif order.action == 'SELL' and new_action in {'BUY', 'SELL'}:
         if new_action == 'BUY':  # 4 仅取消旧订单
@@ -386,8 +386,8 @@ async def check_open_order(trade_client, symbol, new_action, new_price, percenta
                 "%s, %s, 旧订单%s, %s, %s与新进请求%s, %s, %s冲突，旧订单已被取消. 时间: %s, ref = (4)",
                 log_prefix, symbol, order.action, order.quantity, old_order_price, new_action, quantity,
                 new_price, time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()))
-            return True, order
-        else:  # 5 仅取消旧订单
+            return True, order, 'CANCEL'
+        else:  # 5 仅修改订单，不取消
             quantity = order.quantity + sellingQuantity
             if quantity > POSITION[symbol][0] if symbol in POSITION else 0:
                 quantity = POSITION[symbol][0] if symbol in POSITION else 0
@@ -399,7 +399,7 @@ async def check_open_order(trade_client, symbol, new_action, new_price, percenta
                 new_action, sellingQuantity, new_price,
                 order.action, quantity, new_price,
                 time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()))
-            return False, order
+            return False, order, 'MODIFY'
 
 
 async def place_order(action, symbol, price, percentage=1.00):  # 盘中
@@ -411,19 +411,25 @@ async def place_order(action, symbol, price, percentage=1.00):  # 盘中
     percentage = float(percentage)
     order = None
 
-    checker, old_order = await check_open_order(trade_client, symbol, action, price, percentage)
+    checker, old_order, identifier = await check_open_order(trade_client, symbol, action, price, percentage)
     if old_order:  # 如果有订单回传则检查其状态 必须是取消才能下一步 避免订单冲突
-        i = 0
-        while old_order.status != OrderStatus.CANCELLED:
-            old_order = trade_client.get_order(id=old_order.id)
-            if i == 60:
-                logging.warning("旧订单取消出现问题%s", old_order)
-                return
-            await asyncio.sleep(1)
-            i += 1
-        logging.warning("旧订单已取消，%s %s,订单最后更新时间: %s, 下单时间: %s, 订单号:%s", old_order.action,
-                        old_order.quantity, datetime.datetime.fromtimestamp(old_order.update_time / 1000),
-                        datetime.datetime.fromtimestamp(old_order.order_time / 1000), old_order.id)
+        if identifier == 'CANCEL':
+            i = 0
+            while old_order.status != OrderStatus.CANCELLED:
+                old_order = trade_client.get_order(id=old_order.id)
+                if i == 60:
+                    logging.warning("旧订单取消出现问题%s", old_order)
+                    return
+                await asyncio.sleep(1)
+                i += 1
+            logging.warning("旧订单已取消，%s %s,订单最后更新时间: %s, 下单时间: %s, 订单号:%s", old_order.action,
+                            old_order.quantity, datetime.datetime.fromtimestamp(old_order.update_time / 1000),
+                            datetime.datetime.fromtimestamp(old_order.order_time / 1000), old_order.id)
+        if identifier == 'MODIFY':
+            while old_order.remaining and order_status.get(old_order.id, None) != OrderStatus.FILLED:
+                await asyncio.sleep(1)
+            await order_filled(old_order, unfilledPrice)
+            return
 
     if not checker:  # 检查当前是否有未成交订单 如果有则挂起等待前一个成交
         return
