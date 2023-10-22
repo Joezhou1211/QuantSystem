@@ -427,9 +427,7 @@ async def place_order(action, symbol, price, percentage=1.00):  # 盘中
                             old_order.quantity, datetime.datetime.fromtimestamp(old_order.update_time / 1000),
                             datetime.datetime.fromtimestamp(old_order.order_time / 1000), old_order.id)
         if identifier == 'MODIFY':
-            while old_order.remaining and order_status.get(old_order.id, None) != OrderStatus.FILLED:
-                await asyncio.sleep(1)
-            await order_filled(old_order, unfilledPrice)
+            await postHourTradesHandling(trade_client, old_order, old_order.price)
             return
 
     if not checker:
@@ -448,6 +446,7 @@ async def place_order(action, symbol, price, percentage=1.00):  # 盘中
             logging.info("[盘中]买入 %s 失败，现金不足，时间：%s", symbol,
                          time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()))
             print("[盘中]买入", symbol, " 失败，现金不足")
+            return
 
         if action == "SELL":
             quantity = POSITION[symbol][0] if symbol in POSITION else 0
@@ -482,7 +481,8 @@ async def place_order(action, symbol, price, percentage=1.00):  # 盘中
             await asyncio.sleep(sleep_time)
             await order_filled(orders, unfilledPrice)
         else:
-            logging.warning("下单失败，订单为空, 时间: %s", time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()))
+            logging.warning("订单为空, 时间: %s, 标的: %s, Action: %s, Price: %s, Percentage: %s",
+                            time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()), symbol, action, price, percentage)
             return
 
     if STATUS == "POST_HOUR_TRADING" or STATUS == "PRE_HOUR_TRADING":
@@ -495,6 +495,7 @@ async def place_order(action, symbol, price, percentage=1.00):  # 盘中
             logging.info("[盘后]买入 %s 失败，现金不足，时间：%s", symbol,
                          time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()))
             print("[盘后]买入", symbol, " 失败，现金不足")
+            return
 
         if action == "SELL":
             quantity = POSITION[symbol][0] if symbol in POSITION else 0
@@ -530,7 +531,8 @@ async def place_order(action, symbol, price, percentage=1.00):  # 盘中
             await asyncio.sleep(sleep_time)
             await postHourTradesHandling(trade_client, orders, unfilledPrice)
         else:
-            logging.warning("下单失败，订单为空, 时间: %s", time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()))
+            logging.warning("订单为空, 时间: %s, 标的: %s, Action: %s, Price: %s, Percentage: %s",
+                            time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()), symbol, action, price, percentage)
             return
 
 
@@ -627,7 +629,9 @@ async def postHourTradesHandling(trade_client, orders, unfilledPrice):
 
 async def order_filled(orders, unfilledPrice):
     """
-    x
+    应该创建一个逻辑流 所有订单都永久挂单 直到成交
+    针对盘中不成交处理 如果没有办法成交则在盘后用实时价格转为限价单 (待处理)
+    is_trading_hour = STATUS == "TRADING"
     """
     priceDiff = None
     priceDiffPercentage = None
@@ -740,6 +744,7 @@ def record_to_csvTEST2(data):
     except Exception as e:
         logging.warning("记录失败：%s", e)
 
+
 def load_positions():
     try:
         with open('持仓.json', 'r') as f:
@@ -833,7 +838,7 @@ def send_email(ticker, action, quantity, initial_price):
 
     msg = MIMEText('Symbol：%s, \r\n方向：%s, \r\n数量: %s, \r\n初始价格: %s -> 当前价格: %s' % (
         ticker, action, quantity, initial_price, SYMBOLS[ticker][0]))
-    msg['Subject'] = ('警告: %s 卖出失败，请立即检查订单状态！' % ticker)
+    msg['Subject'] = ('警告: %s 订单卖出失败，请立即检查订单状态！' % ticker)
     msg['From'] = gmail_user
     msg['To'] = 'joe.trading1016@gmail.com'  # 收件人邮箱
 
