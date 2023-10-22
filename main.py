@@ -315,7 +315,7 @@ async def check_open_order(trade_client, symbol, new_action, new_price, percenta
         旧sell 新buy -> 取消买单，放买单进入（长线不可能，因为交易之间会有间隔，但是可以写，以防万一）
         旧sell 新sell -> 取消新订单，数量：旧 -> 旧 + 新, 最大数量为当前持仓
 
-    之后升级为监听函数：使用回调接口获取并记录下已经成交/未成交订单，有新的交易信号来到时进行比对，按照上述逻辑执行。
+    之后升级为监听函数：使用回调接口获取并记录下已经成交/未成交订单，有新的交易信号来到时进行比对，按照上述逻辑执行。 -> 已完成
 
     :returns
     True -> 无事发生
@@ -364,7 +364,10 @@ async def check_open_order(trade_client, symbol, new_action, new_price, percenta
                         new_action, sellingQuantity, new_price,
                         order.action, quantity, old_order_price,
                         time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()))
-                    trade_client.modify_order(order=order, quantity=quantity, limit_price=order.limit_price)
+                    if is_trading_hour:
+                        trade_client.modify_order(order=order, quantity=quantity)
+                    if not is_trading_hour:
+                        trade_client.modify_order(order=order, quantity=quantity, limit_price=order.limit_price)
                     return False, order, 'MODIFY'
 
                 if percentage == 1:  # 3 取消两个订单
@@ -391,7 +394,10 @@ async def check_open_order(trade_client, symbol, new_action, new_price, percenta
             quantity = order.quantity + sellingQuantity
             if quantity > POSITION[symbol][0] if symbol in POSITION else 0:
                 quantity = POSITION[symbol][0] if symbol in POSITION else 0
-            trade_client.modify_order(order=order, quantity=quantity, limit_price=new_price)
+            if is_trading_hour:
+                trade_client.modify_order(order=order, quantity=quantity)
+            if not is_trading_hour:
+                trade_client.modify_order(order=order, quantity=quantity, limit_price=new_price)
             logging.warning(
                 "%s, %s, 旧订单%s, %s, %s与新进请求%s, %s, %s冲突，已合并为新订单->%s, %s, %s. 时间: %s, ref = (5)",
                 log_prefix, symbol,
@@ -427,7 +433,10 @@ async def place_order(action, symbol, price, percentage=1.00):  # 盘中
                             old_order.quantity, datetime.datetime.fromtimestamp(old_order.update_time / 1000),
                             datetime.datetime.fromtimestamp(old_order.order_time / 1000), old_order.id)
         if identifier == 'MODIFY':
-            await postHourTradesHandling(trade_client, old_order, old_order.price)
+            if STATUS == "TRADING":
+                await order_filled(old_order, unfilledPrice)
+            else:
+                await postHourTradesHandling(trade_client, old_order, old_order.price)
             return
 
     if not checker:
@@ -537,6 +546,12 @@ async def place_order(action, symbol, price, percentage=1.00):  # 盘中
 
 
 async def check_position(orders):
+    """
+    # 实时仓位仓位应该直接去POSITION里面找 更改的仓位才应该被返回来
+    # 情况1 -> 无持仓 -> 判断是否为卖 卖则取消
+    # 情况2 -> 仓位改变 -> 判断改变的数量 返回作为改单的新数量 限定不能超过最大值
+    # 情况3 -> 仓位无变化 -> 返回原来订单数量orders.quantity
+    """
     quantity = orders.quantity
     if order_status.get(orders.id, None) == OrderStatus.FILLED:  # 优先判断是否成交
         return quantity
@@ -555,12 +570,6 @@ async def check_position(orders):
             quantity = POSITION[orders.contract.symbol][0] if orders.contract.symbol in POSITION else 0
         return quantity
     return quantity  # 不改单
-
-
-# 实时仓位仓位应该直接去POSITION里面找 更改的仓位才应该被返回来
-# 情况1 -> 无持仓 -> 判断是否为卖 卖则取消
-# 情况2 -> 仓位改变 -> 判断改变的数量 返回作为改单的新数量 限定不能超过最大值
-# 情况3 -> 仓位无变化 -> 返回原来订单数量orders.quantity
 
 
 async def postHourTradesHandling(trade_client, orders, unfilledPrice):
@@ -636,7 +645,7 @@ async def order_filled(orders, unfilledPrice):
     priceDiff = None
     priceDiffPercentage = None
     i = 1
-    while i < 100:
+    while i < 300:
         if not orders.remaining and order_status.get(orders.id, None) == OrderStatus.FILLED:
             if unfilledPrice != 0:
                 priceDiff = round(abs(orders.avg_fill_price - unfilledPrice), 4)
@@ -683,7 +692,7 @@ async def order_filled(orders, unfilledPrice):
         else:
             await asyncio.sleep(5)
             i += 1
-    if i == 100:
+    if i == 300:
         logging.warning("[盘中]已经循环等待成交100次，依旧无法成交，请寻找原因。时间：%s, 订单详情: %s, ",
                         time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()),
                         orders)
