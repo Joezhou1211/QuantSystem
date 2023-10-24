@@ -207,8 +207,8 @@ async def identityCheck():
         if 'apiKey' in _data and _data.get('apiKey') == "3f90166a-4cba-4533-86f2-31e690cfabb9":  # 处理交易信号
             print("")
             print("")
-            print("============= START =============")
-            print("---------- 收到交易信号 -----------")
+            print("============= START ==============")
+            print("---------- 收到交易信号 ----------")
             if 'action' in _data and 'symbol' in _data and 'price' in _data:
                 try:
                     await place_order(_data['action'], _data['symbol'], _data['price'],
@@ -483,7 +483,7 @@ async def place_order(action, symbol, price, percentage=1.00):  # 盘中
         if order:
             order_id = trade_client.place_order(order)
             print("----------------------------------")
-            print("[盘中]标的", symbol, "|", order.action, " 下单成功。Price: $", price, "订单号:", order_id)
+            print("[盘中]标的", symbol, "|", order.action, " 下单成功。\n\rPrice: $", price, "订单号:", order_id)
             print("----------------------------------")
             orders = trade_client.get_order(id=order_id)
             order_status[order_id] = orders.status
@@ -532,7 +532,7 @@ async def place_order(action, symbol, price, percentage=1.00):  # 盘中
 
         if order:
             order_id = trade_client.place_order(order)
-            print("[盘后]标的", symbol, "|", order.action, " 第 1 次下单, 成功。Price: $", price, "订单号:",
+            print("[盘后]标的", symbol, "|", order.action, " 第 1 次下单, 成功。\n\rPrice: $", price, "订单号:",
                   order_id)
 
             orders = trade_client.get_order(id=order_id)
@@ -655,7 +655,7 @@ async def order_filled(orders, unfilledPrice):
     i = 1
     while i < 300:
         try:
-            if not orders.remaining and order_status.get(orders.id, None) == OrderStatus.FILLED:
+            if not orders.remaining and orders.quantity == orders.filled and (order_status.get(orders.id, None) == OrderStatus.FILLED or orders.status == OrderStatus.FILLED):
                 if unfilledPrice != 0:
                     priceDiff = round(abs(orders.avg_fill_price - unfilledPrice), 4)
                     priceDiffPercentage = round(priceDiff / unfilledPrice * 100, 4)
@@ -701,6 +701,7 @@ async def order_filled(orders, unfilledPrice):
             else:
                 await asyncio.sleep(5)
                 i += 1
+                orders = orders.get_order(id=orders.id)
         except Exception as e:
             logging.warning("[Order_fill过程中出现问题]订单详情:%s, \n\r错误详情 %s", orders, e)
     if i == 300:
