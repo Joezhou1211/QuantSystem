@@ -16,7 +16,6 @@ from tigeropen.common.util.order_utils import (market_order, limit_order)
 import asyncio
 import math
 import logging
-import csv
 from threading import Thread
 import pytz
 from tigeropen.quote.quote_client import QuoteClient
@@ -26,6 +25,7 @@ from threading import Lock
 import os
 import smtplib
 from email.mime.text import MIMEText
+import aiofiles
 
 app = Flask(__name__)
 app.logger.disabled = True
@@ -39,7 +39,14 @@ POSITION = {}
 CASH = 0.00  # 现金额
 NET_LIQUIDATION = 0.00  # 总价值
 order_status = {}  # 订单状态
+
 cash_lock = Lock()
+lock_raw_data = asyncio.Lock()
+lock_order_record = asyncio.Lock()
+lock_filled_order_record = asyncio.Lock()
+lock_positions_json = asyncio.Lock()
+lock_visualize_record = asyncio.Lock()
+
 my_key = os.environ.get("MY_KEY")
 mail = 'joe' + os.environ.get('Email')
 mail_password = 'ecmc' + os.environ.get('PAS')
@@ -409,7 +416,7 @@ async def check_open_order(trade_client, symbol, new_action, new_price, percenta
 
 
 async def place_order(action, symbol, price, percentage=1.00):  # 盘中
-    record_to_csvTEST2([action, symbol, price, percentage, time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())])
+    await record_to_csvTEST2([action, symbol, price, percentage, time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())])
     global POSITION
     unfilledPrice = 0
     trade_client = TradeClient(client_config)
@@ -480,7 +487,7 @@ async def place_order(action, symbol, price, percentage=1.00):  # 盘中
             print("----------------------------------")
             orders = trade_client.get_order(id=order_id)
             order_status[order_id] = orders.status
-            record_to_csvTEST(
+            await record_to_csvTEST(
                 [time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()), orders.contract.symbol, orders.action, price,
                  orders.quantity, orders.id])  # test
 
@@ -531,7 +538,7 @@ async def place_order(action, symbol, price, percentage=1.00):  # 盘中
             orders = trade_client.get_order(id=order_id)
             order_status[order_id] = orders.status  # 初始化订单状态
 
-            record_to_csvTEST(
+            await record_to_csvTEST(
                 [time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()), orders.contract.symbol, orders.action, price,
                  orders.quantity, orders.id])
             sleep_time = 10
@@ -585,8 +592,9 @@ async def postHourTradesHandling(trade_client, orders, unfilledPrice):
             if not orders.remaining and order_status.get(orders.id, None) == OrderStatus.FILLED:
                 await order_filled(orders, unfilledPrice)
                 return
-            if order_status.get(orders.id, None) in [OrderStatus.CANCELLED, OrderStatus.EXPIRED,
-                                                     OrderStatus.REJECTED] and orders.remaining == orders.quantity and not orders.filled > 0 and orders.reason != '改单成功':
+            elif (order_status.get(orders.id, None) in [OrderStatus.CANCELLED, OrderStatus.EXPIRED,
+                                                        OrderStatus.REJECTED]) and orders.remaining == orders.quantity and not orders.filled > 0 and (
+                    orders.reason not in ['改单成功', '', None]):
                 logging.warning(
                     "[订单异常] %s, 标的：%s, 方向：%s, 持仓数量: %s, 实际交易数量：%s, 价格：%s, 时间：%s",
                     orders.reason, orders.contract.symbol, orders.action,
@@ -646,54 +654,57 @@ async def order_filled(orders, unfilledPrice):
     priceDiffPercentage = None
     i = 1
     while i < 300:
-        if not orders.remaining and order_status.get(orders.id, None) == OrderStatus.FILLED:
-            if unfilledPrice != 0:
-                priceDiff = round(abs(orders.avg_fill_price - unfilledPrice), 4)
-                priceDiffPercentage = round(priceDiff / unfilledPrice * 100, 4)
-                logging.warning("｜%s 滑点金额：$%s,｜滑点百分比：%s%%｜", orders.contract.symbol, priceDiff,
-                                priceDiffPercentage)
+        try:
+            if not orders.remaining and order_status.get(orders.id, None) == OrderStatus.FILLED:
+                if unfilledPrice != 0:
+                    priceDiff = round(abs(orders.avg_fill_price - unfilledPrice), 4)
+                    priceDiffPercentage = round(priceDiff / unfilledPrice * 100, 4)
+                    logging.warning("｜%s 滑点金额：$%s,｜滑点百分比：%s%%｜", orders.contract.symbol, priceDiff,
+                                    priceDiffPercentage)
 
-            logging.warning(
-                "⬆｜订单｜标的: %s｜方向: %s｜数量: %s｜均价: $%s｜佣金: $%s｜成交额: %s｜市场状态: %s｜时间: %s｜⬆",
-                orders.contract.symbol, orders.action, orders.quantity, orders.avg_fill_price, orders.commission,
-                round(orders.filled * orders.avg_fill_price, 2), STATUS,
-                datetime.datetime.fromtimestamp(orders.trade_time / 1000))
-
-            data = [orders.contract.symbol, orders.action, orders.quantity, orders.avg_fill_price, orders.commission,
+                logging.warning(
+                    "⬆｜订单｜标的: %s｜方向: %s｜数量: %s｜均价: $%s｜佣金: $%s｜成交额: %s｜市场状态: %s｜时间: %s｜⬆",
+                    orders.contract.symbol, orders.action, orders.quantity, orders.avg_fill_price, orders.commission,
                     round(orders.filled * orders.avg_fill_price, 2), STATUS,
-                    datetime.datetime.fromtimestamp(orders.trade_time / 1000), orders.id, priceDiff,
-                    priceDiffPercentage]
+                    datetime.datetime.fromtimestamp(orders.trade_time / 1000))
 
-            csv_visualize_data(data)
-            record_to_csv(data + [orders.id])
+                data = [orders.contract.symbol, orders.action, orders.quantity, orders.avg_fill_price, orders.commission,
+                        round(orders.filled * orders.avg_fill_price, 2), STATUS,
+                        datetime.datetime.fromtimestamp(orders.trade_time / 1000), orders.id, priceDiff,
+                        priceDiffPercentage]
 
-            print("----------------------------------")
-            print("订单已成交.成交数量：", orders.filled, "out of", orders.quantity)
-            print("订单完成时间: ", datetime.datetime.fromtimestamp(orders.trade_time / 1000))
-            print("总成交额: USD $", orders.filled * orders.avg_fill_price)
-            print("成交均价：USD $", orders.avg_fill_price)
-            print("佣金：USD $", orders.commission)
-            print("============== END ===============")
-            print("")
-            print("")
+                await csv_visualize_data(data)
+                await record_to_csv(data + [orders.id])
 
-            if orders.id in order_status:
-                del order_status[orders.id]
-            if orders.quantity == POSITION[orders.contract.symbol][0] == \
-                    POSITION[orders.contract.symbol][1] and orders.action == 'SELL':
-                del POSITION[orders.contract.symbol]
-            break
+                print("----------------------------------")
+                print("订单已成交.成交数量：", orders.filled, "out of", orders.quantity)
+                print("订单完成时间: ", datetime.datetime.fromtimestamp(orders.trade_time / 1000))
+                print("总成交额: USD $", orders.filled * orders.avg_fill_price)
+                print("成交均价：USD $", orders.avg_fill_price)
+                print("佣金：USD $", orders.commission)
+                print("============== END ===============")
+                print("")
+                print("")
 
-        elif order_status.get(orders.id, None) in [OrderStatus.CANCELLED, OrderStatus.EXPIRED, OrderStatus.REJECTED]:
-            logging.warning("[订单出错]详情：%s", orders.reason)
-            if orders.id in order_status:
-                del order_status[orders.id]
-            break
-        else:
-            await asyncio.sleep(5)
-            i += 1
+                if orders.id in order_status:
+                    del order_status[orders.id]
+                if orders.quantity == POSITION[orders.contract.symbol][0] == \
+                        POSITION[orders.contract.symbol][1] and orders.action == 'SELL':
+                    del POSITION[orders.contract.symbol]
+                break
+
+            elif order_status.get(orders.id, None) in [OrderStatus.CANCELLED, OrderStatus.EXPIRED, OrderStatus.REJECTED]:
+                logging.warning("[订单出错]%s", orders)
+                if orders.id in order_status:
+                    del order_status[orders.id]
+                break
+            else:
+                await asyncio.sleep(5)
+                i += 1
+        except Exception as e:
+            logging.warning("[Order_fill过程中出现问题]订单详情:%s, \n\r错误详情 %s", orders, e)
     if i == 300:
-        logging.warning("[盘中]已经循环等待成交100次，依旧无法成交，请寻找原因。时间：%s, 订单详情: %s, ",
+        logging.warning("[盘中]已经循环等待成交300次，依旧无法成交，请寻找原因。时间：%s, 订单详情: %s, ",
                         time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()),
                         orders)
         return
@@ -727,119 +738,135 @@ async def postToTrading(orders, trade_client, trade_attempts, unfilledPrice):
 
 # ------------------------------------------------------------ CSV算法 / 邮件功能 --------------------------------------------------------------------------------------------------------#
 
-def record_to_csvTEST(data):
+'''
+查错机制 & 各文件解释：
+TV端 -> 检查真实信号原
+所有收到订单raw_data.csv -> 有订单则可以排除tv端问题  此外可以检查订单percentage
+创建order记录.csv -> 有订单则排除创建order之前的问题
+app.log -> 成交后的记录 检查成交之后 记录到csv之前的问题
+已成交订单记录.csv -> 查看与老虎端是否相符 相符则真实成交
+老虎端查询 -> 确认真实成交
+'''
+
+
+async def record_to_csvTEST2(data):
+    async with lock_raw_data:  # Use the lock for raw_data.csv
+        try:
+            async with aiofiles.open('所有收到订单raw_data.csv', 'a', newline='', encoding='utf-8') as csvfile:
+                await csvfile.write(','.join(map(str, data)) + '\n')
+        except Exception as e:
+            logging.warning("记录失败：%s", e)
+
+
+async def record_to_csvTEST(data):
+    async with lock_order_record:  # Use the lock for order记录.csv
+        try:
+            async with aiofiles.open('创建order记录.csv', 'a', newline='', encoding='utf-8') as csvfile:
+                await csvfile.write(','.join(map(str, data)) + '\n')
+        except Exception as e:
+            logging.warning("记录失败：%s", e)
+
+
+async def record_to_csv(data):
+    async with lock_filled_order_record:  # Use the lock for 已成交订单记录.csv
+        try:
+            async with aiofiles.open('已成交订单记录.csv', 'a', newline='', encoding='utf-8') as csvfile:
+                await csvfile.write(','.join(map(str, data)) + '\n')
+        except Exception as e:
+            logging.warning("记录失败：%s", e)
+
+
+async def load_positions():
+    async with lock_positions_json:  # Use the lock for 持仓.json
+        try:
+            async with aiofiles.open('持仓.json', 'r', encoding='utf-8') as f:
+                data = await f.read()
+                return json.loads(data)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return {}
+
+
+async def save_positions(positions):
+    async with lock_positions_json:  # Use the lock for 持仓.json
+        async with aiofiles.open('持仓.json', 'w', encoding='utf-8') as f:
+            await f.write(json.dumps(positions))
+
+
+async def csv_visualize_data(record):
     try:
-        with open('收到订单记录.csv', 'a', newline='', encoding='utf-8') as csvfile:
-            writer = csv.writer(csvfile)
-            writer.writerow(data)
+        positions = await load_positions()
+
+        ticker, action, quantity, avg_fill_price, commission, total_price, status, trade_time, _id, priceDiff, priceDiffPercentage = record
+        if isinstance(trade_time, int):
+            trade_time = datetime.datetime.fromtimestamp(trade_time / 1000)
+        avg_fill_price = float(avg_fill_price)
+
+        if ticker not in positions:
+            positions[ticker] = {
+                'buy_time': None,
+                'buy_price': None,
+                'sell_prices': [],
+                'quantity': 0,
+                'init_quantity': quantity
+            }
+
+        if action == "BUY":
+            positions[ticker]['buy_time'] = str(trade_time)
+            positions[ticker]['buy_price'] = avg_fill_price
+            positions[ticker]['quantity'] += quantity
+            positions[ticker]['commission'] += commission
+
+        elif action == "SELL":
+            positions[ticker]['sell_prices'].append(avg_fill_price)
+            positions[ticker]['quantity'] -= quantity
+            positions[ticker]['commission'] += commission
+
+            if positions[ticker]['quantity'] <= 0 or len(positions[ticker]['sell_prices']) == 3:
+                last_sell_price = positions[ticker]['sell_prices'][-1]
+                while len(positions[ticker]['sell_prices']) < 3:
+                    positions[ticker]['sell_prices'].append(last_sell_price)
+
+                _quantity = positions[ticker]['init_quantity']
+
+                _commission = positions[ticker]['commission']
+                _commission_str = "${:.2f}".format(_commission)
+
+                s1, s2, s3 = positions[ticker]['sell_prices']
+                s1_str = "${:.2f}".format(s1)
+                s2_str = "${:.2f}".format(s2)
+                s3_str = "${:.2f}".format(s3)
+
+                buy_price = positions[ticker]['buy_price']
+                buy_price_str = "${:.2f}".format(buy_price)
+
+                profit_percentage = ((s1 - buy_price) * 0.5 + (s2 - buy_price) * 0.3 + (s3 - buy_price) * 0.2) / buy_price
+                profit_percentage_str = "{:.6f}%".format(profit_percentage * 100)
+
+                pnl = profit_percentage * (buy_price * _quantity) - _commission
+                pnl_str = "${:.2f}".format(pnl)
+
+                init_total_price = buy_price * _quantity
+                init_total_price_str = "${:.2f}".format(init_total_price)
+
+                processed_data = [
+                    trade_time,  # 最后一次交易时间
+                    ticker,  # symbol
+                    buy_price_str,  # 买入价
+                    s1_str, s2_str, s3_str,  # 卖出价
+                    _quantity,  # 最初买入数量
+                    init_total_price_str,  # 最初买入仓位
+                    profit_percentage_str,  # pnl rate
+                    pnl_str,  # pnl
+                    _commission_str  # 手续费
+                ]
+                async with lock_visualize_record:
+                    async with aiofiles.open('可视化记录.csv', 'a', newline='', encoding='utf-8') as csvfile:
+                        await csvfile.write(','.join(map(str, processed_data)) + '\n')
+                del positions[ticker]
+
+        await save_positions(positions)
     except Exception as e:
-        logging.warning("记录失败：%s", e)
-
-
-def record_to_csv(data):
-    try:
-        with open('成交订单明细.csv', 'a', newline='', encoding='utf-8') as csvfile:
-            writer = csv.writer(csvfile)
-            writer.writerow(data)
-    except Exception as e:
-        logging.warning("记录失败：%s", e)
-
-
-def record_to_csvTEST2(data):
-    try:
-        with open('所有收到订单追踪.csv', 'a', newline='', encoding='utf-8') as csvfile:
-            writer = csv.writer(csvfile)
-            writer.writerow(data)
-    except Exception as e:
-        logging.warning("记录失败：%s", e)
-
-
-def load_positions():
-    try:
-        with open('持仓.json', 'r') as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}
-
-
-def save_positions(positions):
-    with open('持仓.json', 'w') as f:
-        json.dump(positions, f)
-
-
-def csv_visualize_data(record):
-    positions = load_positions()
-
-    ticker, action, quantity, avg_fill_price, commission, total_price, status, trade_time, _id, priceDiff, priceDiffPercentage = record
-    if isinstance(trade_time, int):
-        trade_time = datetime.datetime.fromtimestamp(trade_time / 1000)
-    avg_fill_price = float(avg_fill_price)
-
-    if ticker not in positions:
-        positions[ticker] = {
-            'buy_time': None,
-            'buy_price': None,
-            'sell_prices': [],
-            'quantity': 0,
-            'commission': 0.0,
-            'init_quantity': quantity
-        }
-
-    if action == "BUY":
-        positions[ticker]['buy_time'] = str(trade_time)  # Convert to string for JSON serialization
-        positions[ticker]['buy_price'] = avg_fill_price
-        positions[ticker]['quantity'] += quantity
-        positions[ticker]['commission'] += commission
-
-    elif action == "SELL":
-        positions[ticker]['sell_prices'].append(avg_fill_price)
-        positions[ticker]['quantity'] -= quantity
-        positions[ticker]['commission'] += commission
-
-        if positions[ticker]['quantity'] <= 0 or len(positions[ticker]['sell_prices']) == 3:
-            last_sell_price = positions[ticker]['sell_prices'][-1]
-            while len(positions[ticker]['sell_prices']) < 3:
-                positions[ticker]['sell_prices'].append(last_sell_price)
-
-            _quantity = positions[ticker]['init_quantity']
-
-            _commission = positions[ticker]['commission']
-            _commission_str = "${:.2f}".format(_commission)
-
-            s1, s2, s3 = positions[ticker]['sell_prices']
-            s1_str = "${:.2f}".format(s1)
-            s2_str = "${:.2f}".format(s2)
-            s3_str = "${:.2f}".format(s3)
-
-            buy_price = positions[ticker]['buy_price']
-            buy_price_str = "${:.2f}".format(buy_price)
-
-            profit_percentage = ((s1 - buy_price) * 0.5 + (s2 - buy_price) * 0.3 + (s3 - buy_price) * 0.2) / buy_price
-            profit_percentage_str = "{:.6f}%".format(profit_percentage * 100)
-
-            pnl = profit_percentage * (buy_price * _quantity) - _commission
-            pnl_str = "${:.2f}".format(pnl)
-
-            init_total_price = buy_price * _quantity
-            init_total_price_str = "${:.2f}".format(init_total_price)
-
-            processed_data = [
-                trade_time,  # 最后一次交易时间
-                ticker,  # symbol
-                buy_price_str,  # 买入价
-                s1_str, s2_str, s3_str,  # 卖出价
-                _quantity,  # 最初买入数量
-                init_total_price_str,  # 最初买入仓位
-                profit_percentage_str,  # pnl rate
-                pnl_str,  # pnl
-                _commission_str  # 手续费
-            ]
-            with open('可视化记录.csv', 'a', newline='', encoding='utf-8') as csvfile:
-                writer = csv.writer(csvfile)
-                writer.writerow(processed_data)
-            del positions[ticker]
-
-    save_positions(positions)
+        logging.warning("Visualized_data记录失败,错误：%s，订单详情：", e, record)
 
 
 def send_email(ticker, action, quantity, initial_price):
