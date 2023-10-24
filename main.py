@@ -803,11 +803,12 @@ async def csv_visualize_data(record):
 
         if ticker not in positions:
             positions[ticker] = {
-                'buy_time': None,
-                'buy_price': None,
+                'buy_time': 0,
+                'buy_price': 0,
                 'sell_prices': [],
                 'quantity': 0,
-                'init_quantity': quantity
+                'init_quantity': quantity,
+                'commission': 0
             }
 
         if action == "BUY":
