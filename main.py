@@ -589,7 +589,7 @@ async def postHourTradesHandling(trade_client, orders, unfilledPrice):
             return
 
         if STATUS == "POST_HOUR_TRADING" or STATUS == "PRE_HOUR_TRADING":
-            if not orders.remaining and order_status.get(orders.id, None) == OrderStatus.FILLED:
+            if not orders.remaining and (order_status.get(orders.id, None) == OrderStatus.FILLED or orders.status == OrderStatus.FILLED):
                 await order_filled(orders, unfilledPrice)
                 return
             elif (order_status.get(orders.id, None) in [OrderStatus.CANCELLED, OrderStatus.EXPIRED,
@@ -615,7 +615,10 @@ async def postHourTradesHandling(trade_client, orders, unfilledPrice):
                         if (oldPrice - price) / oldPrice >= 0.2 and volume >= 1000:
                             price = round(price * 0.992, 2)  # 极端情况改单
                             send_email(orders.contract.symbol, orders.action, orders.quantity, initial_price)
-
+                        orders = trade_client.get_order(id=orders.id)
+                        if orders.status == OrderStatus.FILLED:
+                            await order_filled(orders, unfilledPrice)
+                            return
                         trade_client.modify_order(orders, limit_price=price, quantity=quantity)
                         logging.warning("[盘后智能改单]标的 %s | %s第 %s 次下单, 成功。Price: $ %s -> $ %s",
                                         orders.contract.symbol, orders.action, trade_attempts,
@@ -629,10 +632,6 @@ async def postHourTradesHandling(trade_client, orders, unfilledPrice):
                           trade_attempts,
                           " 次下单，失败。原因：该标的最新价格还未更新")
                     await asyncio.sleep(30)
-            # except Exception as e:
-            # logging.warning("[盘后智能改单出现异常]%s, 时间 %s", e,
-            # datetime.datetime.fromtimestamp(orders.trade_time / 1000))
-            # return
         if STATUS == "TRADING":  # 盘前 没改成， 开盘了
             await postToTrading(orders, trade_client, trade_attempts, unfilledPrice)
             break
@@ -652,10 +651,18 @@ async def order_filled(orders, unfilledPrice):
     """
     priceDiff = None
     priceDiffPercentage = None
+    trade_client = TradeClient(client_config)
     i = 1
-    while i < 300:
+    while True:
         try:
-            if not orders.remaining and orders.quantity == orders.filled and (order_status.get(orders.id, None) == OrderStatus.FILLED or orders.status == OrderStatus.FILLED):
+            if i >= 20:
+                orders = trade_client.get_order(id=orders.id)
+                if order_status.get(orders.id, None) != orders.status:
+                    order_status[orders.id] = orders.status  # 每分钟手动校准一次订单状态
+                    logging.warning("[订单状态校准]订单状态校准成功. %s, 时间： %s", orders, time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()))
+                i = 1
+                continue
+            if not orders.remaining and order_status.get(orders.id, None) == OrderStatus.FILLED:
                 if unfilledPrice != 0:
                     priceDiff = round(abs(orders.avg_fill_price - unfilledPrice), 4)
                     priceDiffPercentage = round(priceDiff / unfilledPrice * 100, 4)
@@ -691,24 +698,20 @@ async def order_filled(orders, unfilledPrice):
                 if orders.quantity == POSITION[orders.contract.symbol][0] == \
                         POSITION[orders.contract.symbol][1] and orders.action == 'SELL':
                     del POSITION[orders.contract.symbol]
-                break
+                return
 
             elif order_status.get(orders.id, None) in [OrderStatus.CANCELLED, OrderStatus.EXPIRED, OrderStatus.REJECTED]:
                 logging.warning("[订单出错]%s", orders)
                 if orders.id in order_status:
                     del order_status[orders.id]
-                break
+                return
             else:
-                await asyncio.sleep(5)
+                await asyncio.sleep(3)
                 i += 1
                 orders = orders.get_order(id=orders.id)
         except Exception as e:
             logging.warning("[Order_fill过程中出现问题]订单详情:%s, \n\r错误详情 %s", orders, e)
-    if i == 300:
-        logging.warning("[盘中]已经循环等待成交300次，依旧无法成交，请寻找原因。时间：%s, 订单详情: %s, ",
-                        time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()),
-                        orders)
-        return
+            return
 
 
 async def postToTrading(orders, trade_client, trade_attempts, unfilledPrice):
