@@ -440,13 +440,14 @@ async def place_order(action, symbol, price, orderid, percentage=1.00):  # 盘�
     action = action.upper()
     percentage = float(percentage)
     order = None
-    holds = False
+    holds = '否'
 
     logging.info("订单编号|%s|订单基础信息%s, %s, %s, %s, %s", symbol, action, price, percentage,
                  time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()))
     if symbol in list(SYMBOLS.keys()):
-        holds = True
-    logging.info("订单编号|%s|账号/持仓信息: 账号金额 %s/%s, 持有当前标的: %s", orderid, CASH, NET_LIQUIDATION, POSITION, holds)
+        holds = '是'
+    cash_percentage = str(100 * round((NET_LIQUIDATION - CASH) / NET_LIQUIDATION, 2)) + '%'
+    logging.info("订单编号|%s|当前可用金额百分比: %s, 是否持有当前标的: %s", orderid, cash_percentage, holds)
 
     checker, old_order, identifier = await check_open_order(trade_client, symbol, action, price, percentage, orderid)
     if old_order:  # 如果有订单回传则检查其状态 必须是取消才能下一步 避免订单冲突
