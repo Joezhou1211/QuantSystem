@@ -577,6 +577,7 @@ async def check_position(orders):
     # 情况2 -> 仓位改变 -> 判断改变的数量 返回作为改单的新数量 限定不能超过最大值
     # 情况3 -> 仓位无变化 -> 返回原来订单数量orders.quantity
     """
+    logging.info("订单编号|%s|check point 0", orders.user_mark)
     quantity = orders.quantity
     if order_status.get(orders.id, None) == OrderStatus.FILLED:  # 优先判断是否成交
         return quantity
@@ -603,11 +604,13 @@ async def postHourTradesHandling(trade_client, orders, unfilledPrice):
     initial_price = orders.limit_price
     while True:
         quantity = await check_position(orders)
+        logging.info("订单编号|%s|check point 1", orders.user_mark)
         if not quantity:
             logging.warning("[出现错误]当前无 %s 持仓", orders.contract.symbol)
             return
 
         if STATUS == "POST_HOUR_TRADING" or STATUS == "PRE_HOUR_TRADING":
+            logging.info("订单编号|%s|check point 2", orders.user_mark)
             if not orders.remaining and (
                     order_status.get(orders.id, None) == OrderStatus.FILLED or orders.status == OrderStatus.FILLED):
                 await order_filled(orders, unfilledPrice)
@@ -623,11 +626,13 @@ async def postHourTradesHandling(trade_client, orders, unfilledPrice):
                     orders.limit_price, time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()))
                 return
             else:
+                logging.info("订单编号|%s|check point 3", orders.user_mark)
                 symbol = orders.contract.symbol
                 if symbol in SYMBOLS:  # 检测标的
                     volume = SYMBOLS[symbol][1]
                     price = SYMBOLS[symbol][0]
                     oldPrice = orders.limit_price
+                    logging.info("订单编号|%s|check point 4", orders.user_mark)
                     if abs(price - oldPrice) <= 0.029:  # 价格变动3分钱以下不改单
                         await asyncio.sleep(10)  # 如果价格没变化 继续等 如果变化了才重新下单
                         continue
@@ -636,9 +641,6 @@ async def postHourTradesHandling(trade_client, orders, unfilledPrice):
                             price = round(price * 0.992, 2)  # 极端情况改单
                             send_email(orders.contract.symbol, orders.action, orders.quantity, initial_price)
                         orders = trade_client.get_order(id=orders.id)
-                        if orders.status == OrderStatus.FILLED:
-                            await order_filled(orders, unfilledPrice)
-                            return
                         trade_client.modify_order(orders, limit_price=price, quantity=quantity)
                         logging.warning("[盘后智能改单]订单|%s|标的 %s | %s第 %s 次下单, 成功。Price: $ %s -> $ %s",
                                         orders.id,
@@ -648,6 +650,7 @@ async def postHourTradesHandling(trade_client, orders, unfilledPrice):
                         trade_attempts += 1
                         await asyncio.sleep(20)
                         orders = trade_client.get_order(id=orders.id)
+                        logging.info("订单编号|%s|check point 5", orders.user_mark)
                 else:
                     print("[盘后智能改单]标的", orders.contract.symbol, "|", orders.action, "第",
                           trade_attempts,
@@ -671,7 +674,7 @@ async def order_filled(orders, unfilledPrice):
     针对盘中不成交处理 如果没有办法成交则在盘后用实时价格转为限价单 (待处理)
     is_trading_hour = STATUS == "TRADING"
     """
-    logging.info("订单编号|%s|交易进入结束环节============================", orders.user_mark)
+    logging.info("订单编号|%s|交易进入结束环节", orders.user_mark)
     priceDiff = None
     priceDiffPercentage = None
     trade_client = TradeClient(client_config)
@@ -724,7 +727,7 @@ async def order_filled(orders, unfilledPrice):
                 if orders.quantity == POSITION[orders.contract.symbol][0] == \
                         POSITION[orders.contract.symbol][1] and orders.action == 'SELL':
                     del POSITION[orders.contract.symbol]
-                logging.info("订单编号|%s|订单已结束", orders.user_mark)
+                logging.info("订单编号|%s|订单已结束============================", orders.user_mark)
                 return
 
             elif order_status.get(orders.id, None) in [OrderStatus.CANCELLED, OrderStatus.EXPIRED,
