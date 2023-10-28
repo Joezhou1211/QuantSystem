@@ -247,7 +247,7 @@ async def identityCheck():
 
 def priceAndVolume(timestamp, symbol, price, volume):
     SYMBOLS[symbol] = [round(float(price), 2), float(volume), timestamp]
-
+    # 需要进一步验证SYMBOL的记录是否成功
 
 # ------------------------------------------------------------Tiger Client Function--------------------------------------------------------------------------------------------#
 
@@ -599,9 +599,13 @@ async def check_position(orders):
 
 
 async def postHourTradesHandling(trade_client, orders, unfilledPrice):
+    """
+    当前问题： 总在0123循环 无法进入4
+    """
     logging.info("订单编号|%s|进行盘后交易循环", orders.user_mark)
     trade_attempts = 2
     initial_price = orders.limit_price
+    checker = 0
     while True:
         quantity = await check_position(orders)
         logging.info("订单编号|%s|check point 1", orders.user_mark)
@@ -652,10 +656,15 @@ async def postHourTradesHandling(trade_client, orders, unfilledPrice):
                         orders = trade_client.get_order(id=orders.id)
                         logging.info("订单编号|%s|check point 5", orders.user_mark)
                 else:
-                    print("[盘后智能改单]标的", orders.contract.symbol, "|", orders.action, "第",
-                          trade_attempts,
-                          " 次下单，失败。原因：该标的最新价格还未更新")
+                    if trade_attempts == 2 and not checker:
+                        checker = 1
+                        logging.info("订单编号|%s|自动改单失败，当前标价格还未更新", orders.user_mark)
+                        await asyncio.sleep(30)
+                        continue
+                    symbol_list = list(SYMBOLS.keys())
+                    logging.info("订单编号|%s|自动改单报错，SYMBOLS：%s 不存在当前标的: %s,", orders.user_mark, symbol_list, symbol)
                     await asyncio.sleep(30)
+                    continue
         if STATUS == "TRADING":  # 盘前 没改成， 开盘了
             await postToTrading(orders, trade_client, unfilledPrice)
             break
