@@ -277,15 +277,16 @@ def connect_callback(frame):  # 回调接口 初始化当前Cash/总资产/持�
     if len(position) > 0:
         for pos in position:
             POSITION[pos.contract.symbol] = [pos.quantity, 0]
-    print("============================================================================")
-    print('回调系统连接成功, 当前时间:', time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()), '市场状态：', STATUS)
-    print("可用现金额: USD $", CASH)
-    print('总资产: USD $', NET_LIQUIDATION)
-    if not POSITION:
-        print('当前无持仓')
-    else:
-        print('当前持仓:', POSITION)
-    print("============================================================================")
+    if frame:
+        print("============================================================================")
+        print('回调系统连接成功, 当前时间:', time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()), '市场状态：', STATUS)
+        print("可用现金额: USD $", CASH)
+        print('总资产: USD $', NET_LIQUIDATION)
+        if not POSITION:
+            print('当前持仓: 🈚️️')
+        else:
+            print('当前持仓:', POSITION)
+        print("============================================================================")
 
 
 def on_asset_changed(frame: AssetData):  # 回调接口 获取实时Cash和总资产
@@ -431,9 +432,7 @@ async def check_open_order(trade_client, symbol, new_action, new_price, percenta
 
 
 async def place_order(action, symbol, price, orderid, percentage=1.00):  # 盘中
-    logging.info("订单编号|%s|订单生成中============================", orderid)
-    await record_to_csvTEST2(
-        [action, symbol, price, percentage, time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()), orderid])
+    logging.info("==============订单编号|%s|订单生成中==============", orderid)
     global POSITION
     unfilledPrice = 0
     trade_client = TradeClient(client_config)
@@ -441,6 +440,13 @@ async def place_order(action, symbol, price, orderid, percentage=1.00):  # 盘�
     action = action.upper()
     percentage = float(percentage)
     order = None
+    holds = False
+
+    logging.info("订单编号|%s|订单基础信息%s, %s, %s, %s, %s", symbol, action, price, percentage,
+                 time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()))
+    if symbol in list(SYMBOLS.keys()):
+        holds = True
+    logging.info("订单编号|%s|账号/持仓信息: 账号金额 %s/%s, 持有当前标的: %s", orderid, CASH, NET_LIQUIDATION, POSITION, holds)
 
     checker, old_order, identifier = await check_open_order(trade_client, symbol, action, price, percentage, orderid)
     if old_order:  # 如果有订单回传则检查其状态 必须是取消才能下一步 避免订单冲突
@@ -699,11 +705,14 @@ async def order_filled(orders, unfilledPrice):
                 i = 1
                 continue
             if not orders.remaining and order_status.get(orders.id, None) == OrderStatus.FILLED:
-                if unfilledPrice != 0:
+                if unfilledPrice:
                     priceDiff = round(abs(orders.avg_fill_price - unfilledPrice), 4)
                     priceDiffPercentage = round(priceDiff / unfilledPrice * 100, 4)
                     logging.warning("｜%s 滑点金额：$%s,｜滑点百分比：%s%%｜", orders.contract.symbol, priceDiff,
                                     priceDiffPercentage)
+                if not priceDiff:
+                    priceDiff = ''
+                    priceDiffPercentage = ''
 
                 logging.warning(
                     "订单|%s|%s｜标的: %s｜方向: %s｜数量: %s｜均价: $%s｜佣金: $%s｜成交额: %s｜市场状态: %s｜时间: %s｜⬆",
@@ -719,7 +728,7 @@ async def order_filled(orders, unfilledPrice):
                         priceDiffPercentage]
 
                 await csv_visualize_data(data)
-                await record_to_csv(data + [orders.id, orders.user_mark])
+                await record_to_csv(data + [orders.user_mark])
 
                 print("----------------------------------")
                 print("订单已成交.成交数量：", orders.filled, "out of", orders.quantity)
@@ -736,7 +745,7 @@ async def order_filled(orders, unfilledPrice):
                 if orders.quantity == POSITION[orders.contract.symbol][0] == \
                         POSITION[orders.contract.symbol][1] and orders.action == 'SELL':
                     del POSITION[orders.contract.symbol]
-                logging.info("订单编号|%s|订单已结束============================", orders.user_mark)
+                logging.info("==============订单编号|%s|订单已结束==============", orders.user_mark)
                 return
 
             elif order_status.get(orders.id, None) in [OrderStatus.CANCELLED, OrderStatus.EXPIRED,
@@ -782,7 +791,7 @@ app.log -> 成交后的记录 检查成交之后 记录到csv之前的问题
 
 
 async def record_to_csvTEST2(data):
-    async with lock_raw_data:  # Use the lock for raw_data.csv
+    async with lock_raw_data:  # 当前未使用 可留作备用
         try:
             async with aiofiles.open('所有收到订单raw_data.csv', 'a', newline='', encoding='utf-8') as csvfile:
                 await csvfile.write(','.join(map(str, data)) + '\n')
@@ -791,7 +800,7 @@ async def record_to_csvTEST2(data):
 
 
 async def record_to_csvTEST(data):
-    async with lock_order_record:  # Use the lock for order记录.csv
+    async with lock_order_record:
         try:
             async with aiofiles.open('创建order记录.csv', 'a', newline='', encoding='utf-8') as csvfile:
                 await csvfile.write(','.join(map(str, data)) + '\n')
@@ -800,7 +809,7 @@ async def record_to_csvTEST(data):
 
 
 async def record_to_csv(data):
-    async with lock_filled_order_record:  # Use the lock for 已成交订单记录.csv
+    async with lock_filled_order_record:
         try:
             async with aiofiles.open('已成交订单记录.csv', 'a', newline='', encoding='utf-8') as csvfile:
                 await csvfile.write(','.join(map(str, data)) + '\n')
@@ -809,7 +818,7 @@ async def record_to_csv(data):
 
 
 async def load_positions():
-    async with lock_positions_json:  # Use the lock for 持仓.json
+    async with lock_positions_json:
         try:
             async with aiofiles.open('持仓.json', 'r', encoding='utf-8') as f:
                 data = await f.read()
@@ -819,7 +828,7 @@ async def load_positions():
 
 
 async def save_positions(positions):
-    async with lock_positions_json:  # Use the lock for 持仓.json
+    async with lock_positions_json:
         async with aiofiles.open('持仓.json', 'w', encoding='utf-8') as f:
             await f.write(json.dumps(positions))
 
