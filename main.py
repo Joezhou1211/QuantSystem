@@ -208,29 +208,18 @@ async def signal_processor():
     orderid = 1
     while True:
         _data = await signal_queue.get()
-        try:
-            if 'apiKey' in _data and _data.get('apiKey') == "3f90166a-4cba-4533-86f2-31e690cfabb9":  # 处理交易信号
-                print("")
-                print("")
-                print("============= START ==============")
-                print("---------- 收到交易信号 ----------")
-                if 'action' in _data and 'symbol' in _data and 'price' in _data:
-                    try:
-                        await place_order(_data['action'], _data['symbol'], _data['price'], orderid,
-                                          _data['percentage'])
-                        orderid += 1
-                    except Exception as e:
-                        logging.error(f"处理交易信号时出现错误: {str(e)}")
+        if 'apiKey' in _data and _data.get('apiKey') == "3f90166a-4cba-4533-86f2-31e690cfabb9":  # 处理交易信号
+            print("")
+            print("")
+            print("============= START ==============")
+            print("---------- 收到交易信号 ----------")
+            if 'action' in _data and 'symbol' in _data and 'price' in _data:
+                await place_order(_data['action'], _data['symbol'], _data['price'], orderid, _data['percentage'])
+                orderid += 1
 
-            if 'apiKey' in _data and _data.get('apiKey') == "7a8b2c1d-9e0f-4g5h-6i7j-8k9l0m1n2o3p":  # 处理价格信号
-                if 'time' in _data and 'symbol' in _data and 'price' in _data and 'volume' in _data:
-                    try:
-                        if STATUS in ["POST_HOUR_TRADING", "PRE_HOUR_TRADING"]:
-                            priceAndVolume(_data['time'], _data['symbol'], _data['price'], _data['volume'])
-                    except Exception as e:
-                        logging.error(f"处理价格信号时出现错误: {str(e)}")
-        except Exception as e:
-            logging.warning(f"出现错误: {str(e)}")
+        if 'apiKey' in _data and _data.get('apiKey') == "7a8b2c1d-9e0f-4g5h-6i7j-8k9l0m1n2o3p":  # 处理价格信号
+            if STATUS in ["POST_HOUR_TRADING", "PRE_HOUR_TRADING"]:
+                priceAndVolume(_data['symbol'], _data['price'], _data['volume'])
         await asyncio.sleep(1)
 
 
@@ -245,9 +234,11 @@ async def identityCheck():
         return {"status": "error", "message": str(e)}
 
 
-def priceAndVolume(timestamp, symbol, price, volume):
-    SYMBOLS[symbol] = [round(float(price), 2), float(volume), timestamp]
+def priceAndVolume(symbol, price, volume):
+    SYMBOLS[symbol] = [round(float(price), 2), float(volume)]
     # 需要进一步验证SYMBOL的记录是否成功
+    logging.info(SYMBOLS)
+
 
 # ------------------------------------------------------------Tiger Client Function--------------------------------------------------------------------------------------------#
 
@@ -449,7 +440,7 @@ async def place_order(action, symbol, price, orderid, percentage=1.00):  # 盘�
                  time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()))
     if symbol in list(POSITION.keys()):
         holds = '是'
-    cash_percentage = str(100 * round(CASH / NET_LIQUIDATION, 2)) + '%'
+    cash_percentage = str(round(100 * CASH / NET_LIQUIDATION, 2)) + '%'
     logging.info("订单编号|%s|当前可用金额百分比: %s, 是否持有当前标的: %s", orderid, cash_percentage, holds)
 
     checker, old_order, identifier = await check_open_order(trade_client, symbol, action, price, percentage, orderid)
@@ -488,6 +479,7 @@ async def place_order(action, symbol, price, orderid, percentage=1.00):  # 盘�
         if action == "BUY" and CASH < max_buy:
             logging.info("[盘中]买入 %s 失败，现金不足，时间：%s", symbol,
                          time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()))
+            logging.info("===================订单编号|%s|订单已结束=================== \r\n", orderid)
             print("[盘中]买入", symbol, " 失败，现金不足")
             return
 
@@ -504,6 +496,7 @@ async def place_order(action, symbol, price, orderid, percentage=1.00):  # 盘�
             else:
                 print("[盘中] 交易失败，当前没有", symbol, "的持仓")
                 logging.info("订单编号|%s|买入失败，当前没有 %s 的持仓", orderid, symbol)
+                logging.info("===================订单编号|%s|订单已结束===================\r\n", orderid)
                 print("============== END ===============")
                 return
 
@@ -538,6 +531,7 @@ async def place_order(action, symbol, price, orderid, percentage=1.00):  # 盘�
         if action == "BUY" and CASH < max_buy:
             logging.info("[盘后]买入 %s 失败，现金不足，时间：%s", symbol,
                          time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()))
+            logging.info("===================订单编号|%s|订单已结束===================\r\n", orderid)
             print("[盘后]买入", symbol, " 失败，现金不足")
             return
 
@@ -555,6 +549,7 @@ async def place_order(action, symbol, price, orderid, percentage=1.00):  # 盘�
             else:
                 print("[盘后] 交易失败，当前没有", symbol, "的持仓")
                 logging.info("订单编号|%s|买入失败，当前没有 %s 的持仓", orderid, symbol)
+                logging.info("===================订单编号|%s|订单已结束===================\r\n", orderid)
                 print("============== END ===============")
                 return
 
@@ -624,59 +619,73 @@ async def postHourTradesHandling(trade_client, orders, unfilledPrice):
             return
 
         if STATUS == "POST_HOUR_TRADING" or STATUS == "PRE_HOUR_TRADING":
-            logging.info("订单编号|%s|check point 2", orders.user_mark)
-            if not orders.remaining and (
-                    order_status.get(orders.id, None) == OrderStatus.FILLED or orders.status == OrderStatus.FILLED):
-                await order_filled(orders, unfilledPrice)
-                return
-            elif (order_status.get(orders.id, None) in [OrderStatus.CANCELLED, OrderStatus.EXPIRED,
-                                                        OrderStatus.REJECTED]) and orders.remaining == orders.quantity and not orders.filled > 0 and (
-                    orders.reason not in ['改单成功', '', None, str(orders.contract.symbol)]):
-                logging.warning(
-                    "[订单%|%s|异常] %s, 标的：%s, 方向：%s, 持仓数量: %s, 实际交易数量：%s, 价格：%s, 时间：%s", orders.id,
-                    orders.reason, orders.contract.symbol, orders.action,
-                    POSITION[orders.contract.symbol][0] if orders.contract.symbol in POSITION else 0,
-                    orders.quantity,
-                    orders.limit_price, time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()))
-                return
-            else:
-                logging.info("订单编号|%s|check point 3", orders.user_mark)
-                symbol = orders.contract.symbol
-                if symbol in SYMBOLS:  # 检测标的
-                    volume = SYMBOLS[symbol][1]
-                    price = SYMBOLS[symbol][0]
-                    oldPrice = orders.limit_price
-                    logging.info("订单编号|%s|check point 4", orders.user_mark)
-                    logging.info("该标的后台价格/下单价格: %s/%s", SYMBOLS[orders.contract.symbol][0], orders.limit_price)
-                    if abs(price - oldPrice) <= 0.029:  # 价格变动3分钱以下不改单
-                        await asyncio.sleep(10)  # 如果价格没变化 继续等 如果变化了才重新下单
-                        continue
-                    else:
-                        if (oldPrice - price) / oldPrice >= 0.2 and volume >= 1000:
-                            price = round(price * 0.992, 2)  # 极端情况改单
-                            send_email(orders.contract.symbol, orders.action, orders.quantity, initial_price)
-                        orders = trade_client.get_order(id=orders.id)
-                        trade_client.modify_order(orders, limit_price=price, quantity=quantity)
-                        logging.warning("[盘后智能改单]订单|%s|标的 %s | %s第 %s 次下单, 成功。Price: $ %s -> $ %s",
-                                        orders.id,
-                                        orders.contract.symbol, orders.action, trade_attempts,
-                                        oldPrice, price)
-                        unfilledPrice = price
-                        trade_attempts += 1
-                        logging.info("订单编号|%s|check point 5, 休眠20s", orders.user_mark)
-                        await asyncio.sleep(20)
-                        orders = trade_client.get_order(id=orders.id)
-                        continue
+            try:
+                logging.info("订单编号|%s|check point 2", orders.user_mark)
+                if not orders.remaining and (
+                        order_status.get(orders.id, None) == OrderStatus.FILLED or orders.status == OrderStatus.FILLED):
+                    await order_filled(orders, unfilledPrice)
+                    return
+                elif (order_status.get(orders.id, None) in [OrderStatus.CANCELLED, OrderStatus.EXPIRED,
+                                                            OrderStatus.REJECTED]) and orders.remaining == orders.quantity and not orders.filled > 0 and (
+                        orders.reason not in ['改单成功', '', None, str(orders.contract.symbol)]):
+                    logging.warning(
+                        "[订单%|%s|异常] %s, 标的：%s, 方向：%s, 持仓数量: %s, 实际交易数量：%s, 价格：%s, 时间：%s",
+                        orders.id,
+                        orders.reason, orders.contract.symbol, orders.action,
+                        POSITION[orders.contract.symbol][0] if orders.contract.symbol in POSITION else 0,
+                        orders.quantity,
+                        orders.limit_price, time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()))
+                    return
                 else:
-                    if trade_attempts == 2 and not checker:
-                        checker = 1
-                        logging.info("订单编号|%s|自动改单失败，当前标价格还未更新", orders.user_mark)
+                    logging.info("订单编号|%s|check point 3", orders.user_mark)
+                    symbol = orders.contract.symbol
+                    if symbol in SYMBOLS:  # 检测标的
+                        volume = SYMBOLS[symbol][1]
+                        price = SYMBOLS[symbol][0]
+                        oldPrice = orders.limit_price
+                        logging.info("订单编号|%s|check point 4", orders.user_mark)
+                        logging.info("标的%s后台价格/下单价格: %s/%s", symbol, SYMBOLS[symbol][0], orders.limit_price)
+                        if abs(price - oldPrice) <= 0.029:  # 价格变动3分钱以下不改单
+                            orders = trade_client.get_order(id=orders.id)
+                            if orders.stuats == OrderStatus.FILLED:
+                                logging.info("订单编号|%s|check point 4.1", orders.user_mark)
+                                await order_filled(orders, unfilledPrice)
+                                return
+                            await asyncio.sleep(10)  # 如果价格没变化 继续等 如果变化了才重新下单
+                            continue
+                        else:
+                            if (oldPrice - price) / oldPrice >= 0.2 and volume >= 1000:
+                                price = round(price * 0.992, 2)  # 极端情况改单
+                                send_email(orders.contract.symbol, orders.action, orders.quantity, initial_price)
+                            orders = trade_client.get_order(id=orders.id)
+                            if orders.stuats == OrderStatus.FILLED:
+                                logging.info("订单编号|%s|check point 4.2", orders.user_mark)
+                                await order_filled(orders, unfilledPrice)
+                                return
+                            trade_client.modify_order(orders, limit_price=price, quantity=quantity)
+                            logging.warning("[盘后智能改单]订单|%s|标的 %s | %s第 %s 次下单, 成功。Price: $ %s -> $ %s",
+                                            orders.id,
+                                            orders.contract.symbol, orders.action, trade_attempts,
+                                            oldPrice, price)
+                            unfilledPrice = price
+                            trade_attempts += 1
+                            logging.info("订单编号|%s|check point 5, 休眠20s", orders.user_mark)
+                            await asyncio.sleep(20)
+                            orders = trade_client.get_order(id=orders.id)
+                            continue
+                    else:
+                        if trade_attempts == 2 and not checker:
+                            checker = 1
+                            logging.info("订单编号|%s|自动改单失败，当前标价格还未更新", orders.user_mark)
+                            await asyncio.sleep(30)
+                            continue
+                        symbol_list = list(SYMBOLS.keys())
+                        logging.info("订单编号|%s|自动改单报错，SYMBOLS：%s 不存在当前标的: %s,", orders.user_mark,
+                                     symbol_list, symbol)
                         await asyncio.sleep(30)
                         continue
-                    symbol_list = list(SYMBOLS.keys())
-                    logging.info("订单编号|%s|自动改单报错，SYMBOLS：%s 不存在当前标的: %s,", orders.user_mark, symbol_list, symbol)
-                    await asyncio.sleep(30)
-                    continue
+            except Exception as e:
+                logging.warning("订单编号|%s|自动改单报错，错误信息：%s", orders.user_mark, e)
         if STATUS == "TRADING":  # 盘前 没改成， 开盘了
             await postToTrading(orders, trade_client, unfilledPrice)
             break
@@ -751,7 +760,7 @@ async def order_filled(orders, unfilledPrice):
                 if orders.quantity == POSITION[orders.contract.symbol][0] == \
                         POSITION[orders.contract.symbol][1] and orders.action == 'SELL':
                     del POSITION[orders.contract.symbol]
-                logging.info("===================订单编号|%s|订单已结束===================", orders.user_mark)
+                logging.info("===================订单编号|%s|订单已结束===================\r\n", orders.user_mark)
                 return
 
             elif order_status.get(orders.id, None) in [OrderStatus.CANCELLED, OrderStatus.EXPIRED,
@@ -889,7 +898,7 @@ async def csv_visualize_data(record):
                 buy_price_str = "${:.2f}".format(buy_price)
 
                 profit_percentage = ((s1 - buy_price) * 0.5 + (s2 - buy_price) * 0.3 + (
-                            s3 - buy_price) * 0.2) / buy_price
+                        s3 - buy_price) * 0.2) / buy_price
                 profit_percentage_str = "{:.6f}%".format(profit_percentage * 100)
 
                 pnl = profit_percentage * (buy_price * _quantity) - _commission
