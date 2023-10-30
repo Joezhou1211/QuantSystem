@@ -280,10 +280,11 @@ def connect_callback(frame):  # 回调接口 初始化当前Cash/总资产/持�
     if frame:
         print("============================================================================")
         print('回调系统连接成功, 当前时间:', time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()), '市场状态：', STATUS)
-        print("可用现金额: USD $", CASH)
+        cash_percentage = str(100 * round(CASH / NET_LIQUIDATION, 2)) + '%'
+        print("可用现金: ", cash_percentage)
         print('总资产: USD $', NET_LIQUIDATION)
         if not POSITION:
-            print('当前持仓: 🈚️️')
+            print('当前持仓: 无')
         else:
             print('当前持仓:', POSITION)
         print("============================================================================")
@@ -442,11 +443,11 @@ async def place_order(action, symbol, price, orderid, percentage=1.00):  # 盘�
     order = None
     holds = '否'
 
-    logging.info("订单编号|%s|订单基础信息%s, %s, %s, %s, %s", symbol, action, price, percentage,
+    logging.info("订单编号|%s|订单基础信息%s, %s, %s, %s", symbol, action, price, percentage,
                  time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()))
     if symbol in list(SYMBOLS.keys()):
         holds = '是'
-    cash_percentage = str(100 * round((NET_LIQUIDATION - CASH) / NET_LIQUIDATION, 2)) + '%'
+    cash_percentage = str(100 * round(CASH / NET_LIQUIDATION, 2)) + '%'
     logging.info("订单编号|%s|当前可用金额百分比: %s, 是否持有当前标的: %s", orderid, cash_percentage, holds)
 
     checker, old_order, identifier = await check_open_order(trade_client, symbol, action, price, percentage, orderid)
