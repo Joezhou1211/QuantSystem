@@ -208,6 +208,11 @@ async def signal_processor():
     orderid = 1
     while True:
         _data = await signal_queue.get()
+        if 'apiKey' in _data and _data.get('apiKey') == "7a8b2c1d-9e0f-4g5h-6i7j-8k9l0m1n2o3p":  # 处理价格信号
+            if STATUS in ["POST_HOUR_TRADING", "PRE_HOUR_TRADING"]:
+                priceAndVolume(_data['symbol'], _data['price'], _data['volume'])
+                logging.info("收到价格信号: %s, %s, %s", _data['symbol'], _data['price'], _data['volume'])
+
         if 'apiKey' in _data and _data.get('apiKey') == "3f90166a-4cba-4533-86f2-31e690cfabb9":  # 处理交易信号
             print("")
             print("")
@@ -217,9 +222,6 @@ async def signal_processor():
                 await place_order(_data['action'], _data['symbol'], _data['price'], orderid, _data['percentage'])
                 orderid += 1
 
-        if 'apiKey' in _data and _data.get('apiKey') == "7a8b2c1d-9e0f-4g5h-6i7j-8k9l0m1n2o3p":  # 处理价格信号
-            if STATUS in ["POST_HOUR_TRADING", "PRE_HOUR_TRADING"]:
-                priceAndVolume(_data['symbol'], _data['price'], _data['volume'])
         await asyncio.sleep(1)
 
 
@@ -236,9 +238,8 @@ async def identityCheck():
 
 def priceAndVolume(symbol, price, volume):
     SYMBOLS[symbol] = [round(float(price), 2), float(volume)]
+    logging.info("价格信号已记录: %s, %s, %s", symbol, price, volume)
     # 需要进一步验证SYMBOL的记录是否成功
-    logging.info(SYMBOLS)
-
 
 # ------------------------------------------------------------Tiger Client Function--------------------------------------------------------------------------------------------#
 
@@ -647,7 +648,7 @@ async def postHourTradesHandling(trade_client, orders, unfilledPrice):
                         logging.info("标的%s后台价格/下单价格: %s/%s", symbol, SYMBOLS[symbol][0], orders.limit_price)
                         if abs(price - oldPrice) <= 0.029:  # 价格变动3分钱以下不改单
                             orders = trade_client.get_order(id=orders.id)
-                            if orders.stuats == OrderStatus.FILLED:
+                            if orders.status == OrderStatus.FILLED:
                                 logging.info("订单编号|%s|check point 4.1", orders.user_mark)
                                 await order_filled(orders, unfilledPrice)
                                 return
@@ -658,7 +659,7 @@ async def postHourTradesHandling(trade_client, orders, unfilledPrice):
                                 price = round(price * 0.992, 2)  # 极端情况改单
                                 send_email(orders.contract.symbol, orders.action, orders.quantity, initial_price)
                             orders = trade_client.get_order(id=orders.id)
-                            if orders.stuats == OrderStatus.FILLED:
+                            if orders.status == OrderStatus.FILLED:
                                 logging.info("订单编号|%s|check point 4.2", orders.user_mark)
                                 await order_filled(orders, unfilledPrice)
                                 return
