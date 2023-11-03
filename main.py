@@ -372,7 +372,6 @@ async def check_open_order(trade_client, symbol, new_action, new_price, percenta
         return True, None, None
     order = open_orders[0]
     is_trading_hour = STATUS == "TRADING"
-    log_prefix = "[盘中]" if is_trading_hour else "[盘后]"
 
     holding = POSITION[symbol][0] if symbol in POSITION else 0  # 获取标的现有持仓
     sellingQuantity = int(math.ceil(holding * percentage))  # 计算新订单卖出数量
@@ -389,8 +388,8 @@ async def check_open_order(trade_client, symbol, new_action, new_price, percenta
             if compare_price > new_price:  # 1 取消两个订单
                 trade_client.cancel_order(id=order.id)
                 logging.warning(
-                    "%s, %s, 旧订单%s, %s, %s与新进请求%s, %s, %s冲突，两个订单均被取消. ref = (1)",
-                    log_prefix, symbol, order.action, order.quantity, old_order_price, new_action, sellingQuantity,
+                    "|%s|%s, 旧订单%s, %s, %s与新进请求%s, %s, %s冲突，两个订单均被取消. ref = (1)",
+                    orderid, symbol, order.action, order.quantity, old_order_price, new_action, sellingQuantity,
                     new_price)
                 order.user_mark = '与新订单方向冲突被取消'
                 return False, order, 'CANCEL'
@@ -399,8 +398,8 @@ async def check_open_order(trade_client, symbol, new_action, new_price, percenta
                 if percentage < 1:  # 2 仅改变数量
                     quantity = int(abs(percentage - 1) * order.quantity)
                     logging.warning(
-                        "%s, %s, 旧订单%s, %s, %s与新进请求%s, %s, %s冲突，已合并为新订单->%s, %s, %s. ref = (2)",
-                        log_prefix, symbol,
+                        "|%s|%s, 旧订单%s, %s, %s与新进请求%s, %s, %s冲突，已合并为新订单->%s, %s, %s. ref = (2)",
+                        orderid, symbol,
                         order.action, order.quantity, old_order_price,
                         new_action, sellingQuantity, new_price,
                         order.action, quantity, old_order_price)
@@ -413,8 +412,8 @@ async def check_open_order(trade_client, symbol, new_action, new_price, percenta
                 if percentage == 1:  # 3 取消两个订单
                     trade_client.cancel_order(id=order.id)
                     logging.warning(
-                        "%s, %s, 旧订单%s, %s, %s与新进请求%s, %s, %s冲突，两个订单均被取消. ref = (3)",
-                        log_prefix, symbol, order.action, order.quantity, old_order_price, new_action, sellingQuantity,
+                        "|%s|%s, 旧订单%s, %s, %s与新进请求%s, %s, %s冲突，两个订单均被取消. ref = (3)",
+                        orderid, symbol, order.action, order.quantity, old_order_price, new_action, sellingQuantity,
                         new_price)
                     order.user_mark = '与新订单方向冲突被取消'
                     return False, order, 'CANCEL'
@@ -427,8 +426,8 @@ async def check_open_order(trade_client, symbol, new_action, new_price, percenta
             trade_client.cancel_order(id=order.id)
             quantity = int((NET_LIQUIDATION * 0.25) // new_price)
             logging.warning(
-                "%s, %s, 旧订单%s, %s, %s与新进请求%s, %s, %s冲突，旧订单已被取消. ref = (4)",
-                log_prefix, symbol, order.action, order.quantity, old_order_price, new_action, quantity,
+                "|%s|%s, 旧订单%s, %s, %s与新进请求%s, %s, %s冲突，旧订单已被取消. ref = (4)",
+                orderid, symbol, order.action, order.quantity, old_order_price, new_action, quantity,
                 new_price)
             order.user_mark = '旧订单被新订台取代，旧订单被取消'
             return True, order, 'CANCEL'
@@ -441,8 +440,8 @@ async def check_open_order(trade_client, symbol, new_action, new_price, percenta
             if not is_trading_hour:
                 trade_client.modify_order(order=order, quantity=quantity, limit_price=new_price)
             logging.warning(
-                "%s, %s, 旧订单%s, %s, %s与新进请求%s, %s, %s冲突，已合并为新订单->%s, %s, %s. ref = (5)",
-                log_prefix, symbol,
+                "|%s|%s, 旧订单%s, %s, %s与新进请求%s, %s, %s冲突，已合并为新订单->%s, %s, %s. ref = (5)",
+                orderid, symbol,
                 order.action, order.quantity, old_order_price,
                 new_action, sellingQuantity, new_price,
                 order.action, quantity, new_price)
@@ -477,7 +476,7 @@ async def place_order(action, symbol, price, orderid, percentage=1.00):  # 盘�
                     return
                 await asyncio.sleep(1)
                 i += 1
-            logging.warning("旧订单已取消，%s %s,订单最后更新时间: %s, 下单时间: %s, 订单号:%s", old_order.action,
+            logging.warning("|%s|旧订单已取消，%s %s,订单最后更新时间: %s, 下单时间: %s, 订单号:%s", orderid, old_order.action,
                             old_order.quantity, datetime.datetime.fromtimestamp(old_order.update_time / 1000),
                             datetime.datetime.fromtimestamp(old_order.order_time / 1000), old_order.id)
         if identifier == 'MODIFY':
@@ -764,7 +763,7 @@ async def order_filled(orders, unfilledPrice, orderid):
                 if unfilledPrice:
                     priceDiff = round(abs(orders.avg_fill_price - unfilledPrice), 4)
                     priceDiffPercentage = round(priceDiff / unfilledPrice * 100, 4)
-                    logging.warning("｜%s 滑点金额：$%s,｜滑点百分比：%s%%｜", orders.contract.symbol, priceDiff,
+                    logging.warning("|%s|滑点金额：$%s, 滑点百分比：%s%%", orderid, priceDiff,
                                     priceDiffPercentage)
                 if not priceDiff:
                     priceDiff = ''
