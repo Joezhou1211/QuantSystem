@@ -475,9 +475,10 @@ async def check_open_order(trade_client, symbol, new_action, new_price, percenta
             if compare_price > new_price:  # 1 取消两个订单
                 trade_client.cancel_order(id=order.id)
                 logging.warning(
-                    "|%s|%s, 旧订单|%s|%s, %s, %s与新进请求%s, %s, %s冲突，两个订单均被取消. ref = (1)",
-                    orderid, symbol, old_orderid, order.action, order.quantity, old_order_price, new_action, sellingQuantity,
+                    "|%s|+|%s|取消 %s 旧%s, %s, %s, 新%s, %s, %s, ref(1)",
+                    old_orderid, orderid, symbol, order.action, order.quantity, old_order_price, new_action, sellingQuantity,
                     new_price)
+
                 order_dict[order.id].append('与新订单方向冲突被取消')
                 return False, order, 'CANCEL'
 
@@ -485,8 +486,8 @@ async def check_open_order(trade_client, symbol, new_action, new_price, percenta
                 if percentage < 1:  # 2 仅改变数量
                     quantity = int(abs(percentage - 1) * order.quantity)
                     logging.warning(
-                        "|%s|%s, 旧订单|%s|%s, %s, %s与新进请求%s, %s, %s冲突，已合并为新订单->%s, %s, %s. ref = (2)",
-                        orderid, symbol, old_orderid,
+                        "|%s|->|%s|合并 %s 旧%s, %s, %s, 新%s, %s, %s, 合并为->%s, %s, %s. ref(2)",
+                        old_orderid, orderid, symbol,
                         order.action, order.quantity, old_order_price,
                         new_action, sellingQuantity, new_price,
                         order.action, quantity, old_order_price)
@@ -499,8 +500,8 @@ async def check_open_order(trade_client, symbol, new_action, new_price, percenta
                 if percentage == 1:  # 3 取消两个订单
                     trade_client.cancel_order(id=order.id)
                     logging.warning(
-                        "|%s|%s, 旧订单|%s|%s, %s, %s与新进请求%s, %s, %s冲突，两个订单均被取消. ref = (3)",
-                        orderid, symbol, old_orderid, order.action, order.quantity, old_order_price, new_action, sellingQuantity,
+                        "|%s|+|%s|取消 %s 旧%s, %s, %s, 新%s, %s, %s, ref(3)",
+                        old_orderid, orderid, symbol, order.action, order.quantity, old_order_price, new_action, sellingQuantity,
                         new_price)
                     order_dict[order.id].append('与新订单方向冲突被取消')
                     return False, order, 'CANCEL'
@@ -513,8 +514,8 @@ async def check_open_order(trade_client, symbol, new_action, new_price, percenta
             trade_client.cancel_order(id=order.id)
             quantity = int((NET_LIQUIDATION * 0.25) // new_price)
             logging.warning(
-                "|%s|%s, 旧订单|%s|%s, %s, %s与新进请求%s, %s, %s冲突，旧订单已被取消. ref = (4)",
-                orderid, symbol, old_orderid, order.action, order.quantity, old_order_price, new_action, quantity,
+                "|%s|取消 %s 旧%s, %s, %s, 新%s, %s, %s, ref(4)",
+                old_orderid, symbol, order.action, order.quantity, old_order_price, new_action, quantity,
                 new_price)
             order_dict[order.id].append('旧订单被新订单取代，旧订单被取消')
             return True, order, 'CANCEL'
@@ -527,8 +528,8 @@ async def check_open_order(trade_client, symbol, new_action, new_price, percenta
             if not is_trading_hour:
                 trade_client.modify_order(order=order, quantity=quantity, limit_price=new_price)
             logging.warning(
-                "|%s|%s, 旧订单|%s|%s, %s, %s与新进请求%s, %s, %s冲突，已合并为新订单->%s, %s, %s. ref = (5)",
-                orderid, symbol, old_orderid,
+                "|%s|->|%s|合并 %s 旧%s, %s, %s, 新%s, %s, %s, 合并为->%s, %s, %s. ref(5)",
+                old_orderid, orderid, symbol,
                 order.action, order.quantity, old_order_price,
                 new_action, sellingQuantity, new_price,
                 order.action, quantity, new_price)
@@ -751,7 +752,7 @@ async def postHourTradesHandling(trade_client, orders, unfilledPrice, orderid):
                 orders.id] \
                     in [OrderStatus.CANCELLED, OrderStatus.EXPIRED, OrderStatus.REJECTED]:
                 logging.warning(
-                    "|%s|异常: %s, 具体信息：%s",
+                    "|%s|订单取消:%s %s",
                     orderid, orders.reason, order_dict[orders.id][1] if orders.id in order_dict and len(order_dict[orders.id]) > 1 else None)
                 return
             else:
@@ -786,7 +787,7 @@ async def postHourTradesHandling(trade_client, orders, unfilledPrice, orderid):
                             return
                         trade_client.modify_order(orders, limit_price=price, quantity=quantity)
                         # logging.info("|%s|check point 4.7", orderid)
-                        logging.warning("|%s|标的 %s|%s第 %s 次下单, 成功。Price: $ %s -> $ %s",
+                        logging.warning("|%s|->%s|%s第%s次下单 $ %s -> $ %s",
                                         orderid, orders.contract.symbol, orders.action, trade_attempts,
                                         oldPrice, price)
                         unfilledPrice = price
@@ -819,7 +820,7 @@ async def postHourTradesHandling(trade_client, orders, unfilledPrice, orderid):
             break
         if STATUS in ["CLOSING", "NOT_YET_OPEN", "MARKET_CLOSED",
                       "EARLY_CLOSED"]:  # 盘后结束 没改成，收盘了  之后使用GTC 更改逻辑为内循环检查开盘状态 开盘后重新进入post hour订单大循环
-            logging.warning("[交易时间超出当日交易时段]已经挂起订单|%s|等待盘前后继续交易,标的: %s｜方向: %s｜",
+            logging.warning("[交易时间超出当日交易时段]已经挂起订单|%s|等待盘前后继续交易,标的: %s|方向: %s|",
                             orderid,
                             orders.contract.symbol,
                             orders.action)
@@ -852,7 +853,7 @@ async def order_filled(orders, unfilledPrice, orderid):
                 priceDiff = round(abs(orders.avg_fill_price - unfilledPrice), 4)
                 if priceDiff > 0.01:
                     priceDiffPercentage = round(priceDiff / unfilledPrice * 100, 4)
-                    logging.warning("|%s|滑点金额：$%s, 滑点百分比：%s%%", orderid, priceDiff,
+                    logging.warning("|%s|->滑点金额：$%s, 滑点百分比：%s%%", orderid, priceDiff,
                                     priceDiffPercentage)
                 else:
                     priceDiff = ''
@@ -863,7 +864,7 @@ async def order_filled(orders, unfilledPrice, orderid):
                 priceDiffPercentage = ''
 
             logging.warning(
-                "|%s｜%s｜%s｜%s｜均价: $%s｜佣金: $%s｜成交额: %s｜",
+                "|%s|%s|%s|%s|均价: $%s|佣金: $%s|成交额: %s|",
                 orderid,
                 orders.contract.symbol, orders.action, orders.quantity, orders.avg_fill_price, orders.commission,
                 round(orders.filled * orders.avg_fill_price, 2))
@@ -990,7 +991,7 @@ async def csv_visualize_data(record):
     if ticker not in positions:
         positions[ticker] = {
             'buy_time': 0,
-            'buy_price': 1,
+            'buy_price': 0,
             'sell_prices': [],
             'quantity': 0,
             'init_quantity': quantity,
@@ -1027,13 +1028,13 @@ async def csv_visualize_data(record):
             buy_price = positions[ticker]['buy_price']
             buy_price_str = "${:.2f}".format(buy_price)
 
+            if not buy_price:
+                return
             profit_percentage = ((s1 - buy_price) * 0.5 + (s2 - buy_price) * 0.3 + (
-                    s3 - buy_price) * 0.2) / buy_price
+                        s3 - buy_price) * 0.2) / buy_price
             profit_percentage_str = "{:.6f}%".format(profit_percentage * 100)
-
             pnl = profit_percentage * (buy_price * _quantity) - _commission
             pnl_str = "${:.2f}".format(pnl)
-
             init_total_price = buy_price * _quantity
             init_total_price_str = "${:.2f}".format(init_total_price)
 
