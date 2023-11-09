@@ -475,7 +475,7 @@ async def check_open_order(trade_client, symbol, new_action, new_price, percenta
             if compare_price > new_price:  # 1 取消两个订单
                 trade_client.cancel_order(id=order.id)
                 logging.warning(
-                    "|%s|+|%s|取消 %s 旧%s, %s, %s, 新%s, %s, %s, ref(1)",
+                    "●|%s|<->|%s|取消 %s 旧%s, %s, %s, 新%s, %s, %s, ref(1)",
                     old_orderid, orderid, symbol, order.action, order.quantity, old_order_price, new_action, sellingQuantity,
                     new_price)
 
@@ -486,7 +486,7 @@ async def check_open_order(trade_client, symbol, new_action, new_price, percenta
                 if percentage < 1:  # 2 仅改变数量
                     quantity = int(abs(percentage - 1) * order.quantity)
                     logging.warning(
-                        "|%s|->>|%s|合并 %s 旧%s, %s, %s, 新%s, %s, %s, 合并为->%s, %s, %s. ref(2)",
+                        "●|%s|->>|%s|合并 %s 旧%s, %s, %s, 新%s, %s, %s, 合并为->%s, %s, %s. ref(2)",
                         old_orderid, orderid, symbol,
                         order.action, order.quantity, old_order_price,
                         new_action, sellingQuantity, new_price,
@@ -500,7 +500,7 @@ async def check_open_order(trade_client, symbol, new_action, new_price, percenta
                 if percentage == 1:  # 3 取消两个订单
                     trade_client.cancel_order(id=order.id)
                     logging.warning(
-                        "|%s|+|%s|取消 %s 旧%s, %s, %s, 新%s, %s, %s, ref(3)",
+                        "●|%s|<->|%s|取消 %s 旧%s, %s, %s, 新%s, %s, %s, ref(3)",
                         old_orderid, orderid, symbol, order.action, order.quantity, old_order_price, new_action, sellingQuantity,
                         new_price)
                     order_dict[order.id].append('与新订单方向冲突被取消')
@@ -514,7 +514,7 @@ async def check_open_order(trade_client, symbol, new_action, new_price, percenta
             trade_client.cancel_order(id=order.id)
             quantity = int((NET_LIQUIDATION * 0.25) // new_price)
             logging.warning(
-                "|%s|取消 %s 旧%s, %s, %s, 新%s, %s, %s, ref(4)",
+                "●|%s|<<-取消旧订单 %s 旧%s, %s, %s, 新%s, %s, %s, ref(4)",
                 old_orderid, symbol, order.action, order.quantity, old_order_price, new_action, quantity,
                 new_price)
             order_dict[order.id].append('旧订单被新订单取代，旧订单被取消')
@@ -528,7 +528,7 @@ async def check_open_order(trade_client, symbol, new_action, new_price, percenta
             if not is_trading_hour:
                 trade_client.modify_order(order=order, quantity=quantity, limit_price=new_price)
             logging.warning(
-                "|%s|->>|%s|合并 %s 旧%s, %s, %s, 新%s, %s, %s, 合并为->%s, %s, %s. ref(5)",
+                "●|%s|->>|%s|合并 %s 旧%s, %s, %s, 新%s, %s, %s, 合并为->%s, %s, %s. ref(5)",
                 old_orderid, orderid, symbol,
                 order.action, order.quantity, old_order_price,
                 new_action, sellingQuantity, new_price,
@@ -787,9 +787,11 @@ async def postHourTradesHandling(trade_client, orders, unfilledPrice, orderid):
                             return
                         trade_client.modify_order(orders, limit_price=price, quantity=quantity)
                         # logging.info("|%s|check point 4.7", orderid)
-                        logging.warning("   |%s|%s|%s第%s次下单 $ %s -> $ %s",
-                                        orderid, orders.contract.symbol, orders.action, trade_attempts,
+                        orderid_str = str(orderid).ljust(4)
+                        logging.warning("●|%s|%s|%s|第%s次下单 $%s -> $%s",
+                                        orderid_str, orders.contract.symbol.ljust(5), orders.action.ljust(4), trade_attempts,
                                         oldPrice, price)
+
                         unfilledPrice = price
                         # logging.info("|%s|check point 4.8", orderid)
                         trade_attempts += 1
@@ -863,23 +865,17 @@ async def order_filled(orders, unfilledPrice, orderid):
                 priceDiff = ''
                 priceDiffPercentage = ''
 
-            orderid = str(orderid).ljust(4)  # 假设订单ID最多4位数
-            symbol = orders.contract.symbol.ljust(5)  # 假设股票代码最多5个字符
-            action = orders.action.ljust(4)  # BUY或SELL，4个字符
-            quantity = str(orders.quantity).rjust(5)  # 假设数量最多4位数
-            avg_fill_price = "${:6.2f}".format(orders.avg_fill_price)  # 假设均价最多包括小数点后两位，总共6位字符
-            commission = "${:4.2f}".format(orders.commission)  # 假设佣金最多5位字符，包括小数点后两位
-            total_price = "${:8.2f}".format(orders.filled * orders.avg_fill_price)  # 总额最多包括小数点后两位，总共9位字符
+            orderid_str = str(orderid).center(5)
 
             logging.warning(
-                "|{}|{}|{}|{}|均价: {}|佣金: {}|成交额: {}|",
-                orderid,
-                symbol,
-                action,
-                quantity,
-                avg_fill_price,
-                commission,
-                total_price
+                "|%s|%s|%s|%s|均价%s|佣金%s|成交额%s|",
+                orderid_str,
+                orders.contract.symbol.ljust(5),
+                orders.action.ljust(4),
+                str(orders.quantity).ljust(4),
+                "${:6.2f}".format(orders.avg_fill_price),
+                "${:5.2f}".format(orders.commission),
+                "${:9.2f}".format(orders.filled * orders.avg_fill_price)
             )
 
             data = [orders.contract.symbol, orders.action, orders.quantity, orders.avg_fill_price,
@@ -1096,7 +1092,7 @@ def remove_json():
     if os.path.isfile(file_path):
         try:
             os.remove(file_path)
-            print(f" * 文件 {file_path} 已被删除。")
+            print(f" * 已删除文件 <{file_path}> ")
         except Exception as e:
             print(f"无法删除文件 {file_path}。原因：{e}")
 
