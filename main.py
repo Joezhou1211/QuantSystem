@@ -486,7 +486,7 @@ async def check_open_order(trade_client, symbol, new_action, new_price, percenta
                 if percentage < 1:  # 2 仅改变数量
                     quantity = int(abs(percentage - 1) * order.quantity)
                     logging.warning(
-                        "|%s|->|%s|合并 %s 旧%s, %s, %s, 新%s, %s, %s, 合并为->%s, %s, %s. ref(2)",
+                        "|%s|->>|%s|合并 %s 旧%s, %s, %s, 新%s, %s, %s, 合并为->%s, %s, %s. ref(2)",
                         old_orderid, orderid, symbol,
                         order.action, order.quantity, old_order_price,
                         new_action, sellingQuantity, new_price,
@@ -528,7 +528,7 @@ async def check_open_order(trade_client, symbol, new_action, new_price, percenta
             if not is_trading_hour:
                 trade_client.modify_order(order=order, quantity=quantity, limit_price=new_price)
             logging.warning(
-                "|%s|->|%s|合并 %s 旧%s, %s, %s, 新%s, %s, %s, 合并为->%s, %s, %s. ref(5)",
+                "|%s|->>|%s|合并 %s 旧%s, %s, %s, 新%s, %s, %s, 合并为->%s, %s, %s. ref(5)",
                 old_orderid, orderid, symbol,
                 order.action, order.quantity, old_order_price,
                 new_action, sellingQuantity, new_price,
@@ -787,7 +787,7 @@ async def postHourTradesHandling(trade_client, orders, unfilledPrice, orderid):
                             return
                         trade_client.modify_order(orders, limit_price=price, quantity=quantity)
                         # logging.info("|%s|check point 4.7", orderid)
-                        logging.warning("|%s|->%s|%s第%s次下单 $ %s -> $ %s",
+                        logging.warning("   |%s|%s|%s第%s次下单 $ %s -> $ %s",
                                         orderid, orders.contract.symbol, orders.action, trade_attempts,
                                         oldPrice, price)
                         unfilledPrice = price
@@ -853,7 +853,7 @@ async def order_filled(orders, unfilledPrice, orderid):
                 priceDiff = round(abs(orders.avg_fill_price - unfilledPrice), 4)
                 if priceDiff > 0.01:
                     priceDiffPercentage = round(priceDiff / unfilledPrice * 100, 4)
-                    logging.warning("|%s|->滑点金额：$%s, 滑点百分比：%s%%", orderid, priceDiff,
+                    logging.warning("   |%s|滑点:$%s 百分比:%s%%", orderid, priceDiff,
                                     priceDiffPercentage)
                 else:
                     priceDiff = ''
@@ -863,11 +863,24 @@ async def order_filled(orders, unfilledPrice, orderid):
                 priceDiff = ''
                 priceDiffPercentage = ''
 
+            orderid = str(orderid).ljust(4)  # 假设订单ID最多4位数
+            symbol = orders.contract.symbol.ljust(5)  # 假设股票代码最多5个字符
+            action = orders.action.ljust(4)  # BUY或SELL，4个字符
+            quantity = str(orders.quantity).rjust(5)  # 假设数量最多4位数
+            avg_fill_price = "${:6.2f}".format(orders.avg_fill_price)  # 假设均价最多包括小数点后两位，总共6位字符
+            commission = "${:4.2f}".format(orders.commission)  # 假设佣金最多5位字符，包括小数点后两位
+            total_price = "${:8.2f}".format(orders.filled * orders.avg_fill_price)  # 总额最多包括小数点后两位，总共9位字符
+
             logging.warning(
-                "|%s|%s|%s|%s|均价: $%s|佣金: $%s|成交额: %s|",
+                "|{}|{}|{}|{}|均价: {}|佣金: {}|成交额: {}|",
                 orderid,
-                orders.contract.symbol, orders.action, orders.quantity, orders.avg_fill_price, orders.commission,
-                round(orders.filled * orders.avg_fill_price, 2))
+                symbol,
+                action,
+                quantity,
+                avg_fill_price,
+                commission,
+                total_price
+            )
 
             data = [orders.contract.symbol, orders.action, orders.quantity, orders.avg_fill_price,
                     orders.commission,
@@ -1077,6 +1090,17 @@ def send_email(ticker, action, quantity, initial_price):
         logging.warning('邮件发送失败: %s', e)
 
 
+def remove_json():
+    print("----------------------------------------------------------------------------")
+    file_path = '持仓.json'
+    if os.path.isfile(file_path):
+        try:
+            os.remove(file_path)
+            print(f" * 文件 {file_path} 已被删除。")
+        except Exception as e:
+            print(f"无法删除文件 {file_path}。原因：{e}")
+
+
 if __name__ == "__main__":
     time_T = str(time.strftime('%y-%m-%d|%H:%M', time.localtime())) + '.log'
     logger = logging.getLogger()
@@ -1087,6 +1111,7 @@ if __name__ == "__main__":
     fh.setFormatter(formatter)
 
     logger.addHandler(fh)
+    remove_json()
 
     thread = Thread(target=run_asyncio_loop)
     thread.start()
