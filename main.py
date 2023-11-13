@@ -477,7 +477,8 @@ async def check_open_order(trade_client, symbol, new_action, new_price, percenta
                 trade_client.cancel_order(id=order.id)
                 logging.warning(
                     "●|%s|<->|%s|取消 %s 旧%s, %s, %s, 新%s, %s, %s, ref(1)",
-                    orderid_str, orderid, symbol, order.action, order.quantity, old_order_price, new_action, sellingQuantity,
+                    orderid_str, orderid, symbol, order.action, order.quantity, old_order_price, new_action,
+                    sellingQuantity,
                     new_price)
 
                 order_dict[order.id].append('与新订单方向冲突被取消')
@@ -502,7 +503,8 @@ async def check_open_order(trade_client, symbol, new_action, new_price, percenta
                     trade_client.cancel_order(id=order.id)
                     logging.warning(
                         "●|%s|<->|%s|取消 %s 旧%s, %s, %s, 新%s, %s, %s, ref(3)",
-                        orderid_str, orderid, symbol, order.action, order.quantity, old_order_price, new_action, sellingQuantity,
+                        orderid_str, orderid, symbol, order.action, order.quantity, old_order_price, new_action,
+                        sellingQuantity,
                         new_price)
                     order_dict[order.id].append('与新订单方向冲突被取消')
                     return False, order, 'CANCEL'
@@ -750,12 +752,12 @@ async def postHourTradesHandling(trade_client, orders, unfilledPrice, orderid):
             elif ((order_status.get(orders.id, None) in [OrderStatus.CANCELLED, OrderStatus.EXPIRED,
                                                          OrderStatus.REJECTED])
                   and orders.remaining == orders.quantity and not orders.filled > 0 and
-                  (orders.reason not in ['改单成功', '', None, str(orders.contract.symbol)])) or order_status[
-                orders.id] \
-                    in [OrderStatus.CANCELLED, OrderStatus.EXPIRED, OrderStatus.REJECTED]:
+                  (orders.reason not in ['改单成功', '', None, str(orders.contract.symbol)])) or \
+                    order_status.get(orders.id, None) in [OrderStatus.CANCELLED, OrderStatus.EXPIRED, OrderStatus.REJECTED]:
                 logging.warning(
                     "|%s|订单取消:%s %s",
-                    orderid_str, orders.reason, order_dict[orders.id][1] if orders.id in order_dict and len(order_dict[orders.id]) > 1 else None)
+                    str(orderid).ljust(5), orders.reason,
+                    order_dict[orders.id][1] if orders.id in order_dict and len(order_dict[orders.id]) > 1 else None)
                 return
             else:
                 # logging.info("|%s|check point 3", orderid)
@@ -790,7 +792,8 @@ async def postHourTradesHandling(trade_client, orders, unfilledPrice, orderid):
                         trade_client.modify_order(orders, limit_price=price, quantity=quantity)
                         # logging.info("|%s|check point 4.7", orderid)
                         logging.warning("●|%s|%s|%s|第%s次下单 $%s -> $%s",
-                                        orderid_str, orders.contract.symbol.ljust(5), orders.action.ljust(4), trade_attempts,
+                                        orderid_str, orders.contract.symbol.ljust(5), orders.action.ljust(4),
+                                        trade_attempts,
                                         oldPrice, price)
 
                         unfilledPrice = price
@@ -848,7 +851,8 @@ async def order_filled(orders, unfilledPrice, orderid):
         if i >= 10:
             orders = trade_client.get_order(id=orders.id)
             if order_status.get(orders.id, None) != orders.status:
-                logging.warning("●|%s|状态校准成功: %s -> %s", orderid_str, order_status.get(orders.id, None), orders.status)
+                logging.warning("●|%s|状态校准成功: %s -> %s", orderid_str, order_status.get(orders.id, None),
+                                orders.status)
                 order_status[orders.id] = orders.status
             i = 1
             continue
@@ -901,11 +905,11 @@ async def order_filled(orders, unfilledPrice, orderid):
 
             if orders.id in order_status:
                 del order_status[orders.id]
-            if orders.quantity == POSITION[orders.contract.symbol][0] == \
-                    POSITION[orders.contract.symbol][1] and orders.action == 'SELL':
-                del POSITION[orders.contract.symbol]
-            logging.info("=========================|%s|订单已结束=========================\r\n", orderid)
-            return
+            if orders.contract.symbol in POSITION:
+                if orders.quantity == POSITION[orders.contract.symbol][0] == POSITION[orders.contract.symbol][1] and orders.action == 'SELL':
+                    del POSITION[orders.contract.symbol]
+                logging.info("=========================|%s|订单已结束=========================\r\n", orderid)
+                return
 
         elif order_status.get(orders.id, None) in [OrderStatus.CANCELLED, OrderStatus.EXPIRED,
                                                    OrderStatus.REJECTED]:
@@ -1042,7 +1046,7 @@ async def csv_visualize_data(record):
             if not buy_price:
                 return
             profit_percentage = ((s1 - buy_price) * 0.5 + (s2 - buy_price) * 0.3 + (
-                        s3 - buy_price) * 0.2) / buy_price
+                    s3 - buy_price) * 0.2) / buy_price
             profit_percentage_str = "{:.6f}%".format(profit_percentage * 100)
             pnl = profit_percentage * (buy_price * _quantity) - _commission
             pnl_str = "${:.2f}".format(pnl)
@@ -1105,7 +1109,7 @@ if __name__ == "__main__":
     logger.setLevel(logging.WARN)
 
     fh = RotatingFileHandler(time_T, maxBytes=1 * 1024 * 1024, backupCount=7)  # 最大1MB，备份7个
-    formatter = logging.Formatter('%(asctime)s-%(message)s', datefmt='%H:%M:%S')
+    formatter = logging.Formatter('%(asctime)s-%(message)s', datefmt='%MM-%DD %H:%M:%S')
     fh.setFormatter(formatter)
 
     logger.addHandler(fh)
