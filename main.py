@@ -469,6 +469,7 @@ async def check_open_order(trade_client, symbol, new_action, new_price, percenta
     if not is_trading_hour:
         old_order_price = order.limit_price
     old_orderid = order_dict[order.id][0] if order.id in order_dict else None
+    orderid_str = str(old_orderid).center(4)
 
     if order.action == 'BUY':
         if new_action == 'SELL':
@@ -476,7 +477,7 @@ async def check_open_order(trade_client, symbol, new_action, new_price, percenta
                 trade_client.cancel_order(id=order.id)
                 logging.warning(
                     "●|%s|<->|%s|取消 %s 旧%s, %s, %s, 新%s, %s, %s, ref(1)",
-                    old_orderid, orderid, symbol, order.action, order.quantity, old_order_price, new_action, sellingQuantity,
+                    orderid_str, orderid, symbol, order.action, order.quantity, old_order_price, new_action, sellingQuantity,
                     new_price)
 
                 order_dict[order.id].append('与新订单方向冲突被取消')
@@ -487,7 +488,7 @@ async def check_open_order(trade_client, symbol, new_action, new_price, percenta
                     quantity = int(abs(percentage - 1) * order.quantity)
                     logging.warning(
                         "●|%s|->>|%s|合并 %s 旧%s, %s, %s, 新%s, %s, %s, 合并为->%s, %s, %s. ref(2)",
-                        old_orderid, orderid, symbol,
+                        orderid_str, orderid, symbol,
                         order.action, order.quantity, old_order_price,
                         new_action, sellingQuantity, new_price,
                         order.action, quantity, old_order_price)
@@ -501,7 +502,7 @@ async def check_open_order(trade_client, symbol, new_action, new_price, percenta
                     trade_client.cancel_order(id=order.id)
                     logging.warning(
                         "●|%s|<->|%s|取消 %s 旧%s, %s, %s, 新%s, %s, %s, ref(3)",
-                        old_orderid, orderid, symbol, order.action, order.quantity, old_order_price, new_action, sellingQuantity,
+                        orderid_str, orderid, symbol, order.action, order.quantity, old_order_price, new_action, sellingQuantity,
                         new_price)
                     order_dict[order.id].append('与新订单方向冲突被取消')
                     return False, order, 'CANCEL'
@@ -515,7 +516,7 @@ async def check_open_order(trade_client, symbol, new_action, new_price, percenta
             quantity = int((NET_LIQUIDATION * 0.25) // new_price)
             logging.warning(
                 "●|%s|<<-取消旧订单 %s 旧%s, %s, %s, 新%s, %s, %s, ref(4)",
-                old_orderid, symbol, order.action, order.quantity, old_order_price, new_action, quantity,
+                orderid_str, symbol, order.action, order.quantity, old_order_price, new_action, quantity,
                 new_price)
             order_dict[order.id].append('旧订单被新订单取代，旧订单被取消')
             return True, order, 'CANCEL'
@@ -529,7 +530,7 @@ async def check_open_order(trade_client, symbol, new_action, new_price, percenta
                 trade_client.modify_order(order=order, quantity=quantity, limit_price=new_price)
             logging.warning(
                 "●|%s|->>|%s|合并 %s 旧%s, %s, %s, 新%s, %s, %s, 合并为->%s, %s, %s. ref(5)",
-                old_orderid, orderid, symbol,
+                orderid_str, orderid, symbol,
                 order.action, order.quantity, old_order_price,
                 new_action, sellingQuantity, new_price,
                 order.action, quantity, new_price)
@@ -733,6 +734,7 @@ async def postHourTradesHandling(trade_client, orders, unfilledPrice, orderid):
     initial_price = orders.limit_price
     checker = 0
     i = 0
+    orderid_str = str(orderid).ljust(4)
     while i < 300:
         quantity = await check_position(orders)
         # logging.info("|%s|check point 1", orderid)
@@ -753,7 +755,7 @@ async def postHourTradesHandling(trade_client, orders, unfilledPrice, orderid):
                     in [OrderStatus.CANCELLED, OrderStatus.EXPIRED, OrderStatus.REJECTED]:
                 logging.warning(
                     "|%s|订单取消:%s %s",
-                    orderid, orders.reason, order_dict[orders.id][1] if orders.id in order_dict and len(order_dict[orders.id]) > 1 else None)
+                    orderid_str, orders.reason, order_dict[orders.id][1] if orders.id in order_dict and len(order_dict[orders.id]) > 1 else None)
                 return
             else:
                 # logging.info("|%s|check point 3", orderid)
@@ -787,7 +789,6 @@ async def postHourTradesHandling(trade_client, orders, unfilledPrice, orderid):
                             return
                         trade_client.modify_order(orders, limit_price=price, quantity=quantity)
                         # logging.info("|%s|check point 4.7", orderid)
-                        orderid_str = str(orderid).ljust(4)
                         logging.warning("●|%s|%s|%s|第%s次下单 $%s -> $%s",
                                         orderid_str, orders.contract.symbol.ljust(5), orders.action.ljust(4), trade_attempts,
                                         oldPrice, price)
@@ -842,11 +843,12 @@ async def order_filled(orders, unfilledPrice, orderid):
     priceDiffPercentage = None
     trade_client = TradeClient(client_config)
     i = 1
+    orderid_str = str(orderid).center(4)
     while True:
         if i >= 10:
             orders = trade_client.get_order(id=orders.id)
             if order_status.get(orders.id, None) != orders.status:
-                logging.warning("|%s|状态校准成功: %s -> %s", orderid, order_status.get(orders.id, None), orders.status)
+                logging.warning("●|%s|状态校准成功: %s -> %s", orderid_str, order_status.get(orders.id, None), orders.status)
                 order_status[orders.id] = orders.status
             i = 1
             continue
@@ -855,7 +857,7 @@ async def order_filled(orders, unfilledPrice, orderid):
                 priceDiff = round(abs(orders.avg_fill_price - unfilledPrice), 4)
                 if priceDiff > 0.01:
                     priceDiffPercentage = round(priceDiff / unfilledPrice * 100, 4)
-                    logging.warning("   |%s|滑点:$%s 百分比:%s%%", orderid, priceDiff,
+                    logging.warning("●|%s|滑点:$%s 百分比:%s%%", orderid, priceDiff,
                                     priceDiffPercentage)
                 else:
                     priceDiff = ''
