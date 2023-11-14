@@ -846,11 +846,14 @@ async def order_filled(orders, unfilledPrice, orderid):
     priceDiffPercentage = None
     trade_client = TradeClient(client_config)
     i = 1
-    orderid_str = str(orderid).center(4)
+    orderid_str = str(orderid).ljust(4)
     while True:
         if i >= 10:
             orders = trade_client.get_order(id=orders.id)
+
             if order_status.get(orders.id, None) != orders.status:
+                if not order_status.get(orders.id, None):  # 如果识别到订单状态为空 则直接返回
+                    return
                 logging.warning("●|%s|状态校准成功: %s -> %s", orderid_str, order_status.get(orders.id, None),
                                 orders.status)
                 order_status[orders.id] = orders.status
@@ -861,7 +864,7 @@ async def order_filled(orders, unfilledPrice, orderid):
                 priceDiff = round(abs(orders.avg_fill_price - unfilledPrice), 4)
                 if priceDiff > 0.01:
                     priceDiffPercentage = round(priceDiff / unfilledPrice * 100, 4)
-                    logging.warning("●|%s|滑点:$%s 百分比:%s%%", orderid, priceDiff,
+                    logging.warning("●|%s|滑点:$%s 百分比:%s%%", orderid_str, priceDiff,
                                     priceDiffPercentage)
                 else:
                     priceDiff = ''
@@ -910,6 +913,7 @@ async def order_filled(orders, unfilledPrice, orderid):
                     del POSITION[orders.contract.symbol]
                 logging.info("=========================|%s|订单已结束=========================\r\n", orderid)
                 return
+            return
 
         elif order_status.get(orders.id, None) in [OrderStatus.CANCELLED, OrderStatus.EXPIRED,
                                                    OrderStatus.REJECTED]:
@@ -1109,7 +1113,7 @@ if __name__ == "__main__":
     logger.setLevel(logging.WARN)
 
     fh = RotatingFileHandler(time_T, maxBytes=1 * 1024 * 1024, backupCount=7)  # 最大1MB，备份7个
-    formatter = logging.Formatter('%(asctime)s-%(message)s', datefmt='%MM-%DD %H:%M:%S')
+    formatter = logging.Formatter('%(asctime)s-%(message)s', datefmt='%D %H:%M:%S')
     fh.setFormatter(formatter)
 
     logger.addHandler(fh)
