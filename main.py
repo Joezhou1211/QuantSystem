@@ -54,6 +54,7 @@ my_key = os.environ.get("MY_KEY")
 mail = 'joe' + os.environ.get('Email')
 mail_password = 'ecmc' + os.environ.get('PAS')
 order_dict = {}
+Trading_Percentage = 0.0995  # 在这里修改交易比例
 
 """
 需要的更新：
@@ -381,7 +382,8 @@ def connect_callback(frame):  # 回调接口 初始化当前Cash/总资产/持�
         print("============================================================================")
         print('回调系统连接成功, 当前时间:', time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()), '市场状态：', STATUS)
         cash_percentage = str(100 * round(CASH / NET_LIQUIDATION, 2)) + '%'
-        print("可用现金: ", cash_percentage)
+        print("百分比预设 ", str(math.ceil(Trading_Percentage * 100)) + "%/Trade")
+        print("可用现金: $USD", CASH, "| 百分比：", cash_percentage)
         print('总资产: $USD ', NET_LIQUIDATION)
         if not POSITION:
             print('当前持仓: 无')
@@ -481,6 +483,8 @@ async def check_open_order(trade_client, symbol, new_action, new_price, percenta
                     sellingQuantity,
                     new_price)
 
+                if order.id not in order_dict:
+                    order_dict[order.id] = [0]
                 order_dict[order.id].append('与新订单方向冲突被取消')
                 return False, order, 'CANCEL'
 
@@ -506,6 +510,8 @@ async def check_open_order(trade_client, symbol, new_action, new_price, percenta
                         orderid_str, orderid, symbol, order.action, order.quantity, old_order_price, new_action,
                         sellingQuantity,
                         new_price)
+                    if order.id not in order_dict:
+                        order_dict[order.id] = [0]
                     order_dict[order.id].append('与新订单方向冲突被取消')
                     return False, order, 'CANCEL'
 
@@ -520,6 +526,8 @@ async def check_open_order(trade_client, symbol, new_action, new_price, percenta
                 "●|%s|<<-取消旧订单 %s 旧%s, %s, %s, 新%s, %s, %s, ref(4)",
                 orderid_str, symbol, order.action, order.quantity, old_order_price, new_action, quantity,
                 new_price)
+            if order.id not in order_dict:
+                order_dict[order.id] = [0]
             order_dict[order.id].append('旧订单被新订单取代，旧订单被取消')
             return True, order, 'CANCEL'
         else:  # 5 仅修改订单，不取消
@@ -581,7 +589,7 @@ async def place_order(action, symbol, price, orderid, percentage=1.00):  # 盘�
     if not checker:
         return
 
-    max_buy = NET_LIQUIDATION * 0.25
+    max_buy = NET_LIQUIDATION * Trading_Percentage
     max_quantity = int(max_buy // price)
     contract = stock_contract(symbol=symbol, currency='USD')
 
@@ -736,7 +744,7 @@ async def postHourTradesHandling(trade_client, orders, unfilledPrice, orderid):
     initial_price = orders.limit_price
     checker = 0
     i = 0
-    orderid_str = str(orderid).ljust(4)
+    orderid_str = str(orderid).center(4)
     while i < 300:
         quantity = await check_position(orders)
         # logging.info("|%s|check point 1", orderid)
@@ -753,10 +761,11 @@ async def postHourTradesHandling(trade_client, orders, unfilledPrice, orderid):
                                                          OrderStatus.REJECTED])
                   and orders.remaining == orders.quantity and not orders.filled > 0 and
                   (orders.reason not in ['改单成功', '', None, str(orders.contract.symbol)])) or \
-                    order_status.get(orders.id, None) in [OrderStatus.CANCELLED, OrderStatus.EXPIRED, OrderStatus.REJECTED]:
+                    order_status.get(orders.id, None) in [OrderStatus.CANCELLED, OrderStatus.EXPIRED,
+                                                          OrderStatus.REJECTED]:
                 logging.warning(
                     "|%s|订单取消:%s %s",
-                    str(orderid).ljust(5), orders.reason,
+                    str(orderid).center(5), orders.reason,
                     order_dict[orders.id][1] if orders.id in order_dict and len(order_dict[orders.id]) > 1 else None)
                 return
             else:
@@ -822,10 +831,14 @@ async def postHourTradesHandling(trade_client, orders, unfilledPrice, orderid):
                     continue
 
         if STATUS == "TRADING":  # 盘前 没改成， 开盘了
-            await postToTrading(orders, trade_client, unfilledPrice, orderid)
+            symbol = orders.contract
+            action = orders.action
+            quantity = orders.quantity
+            trade_client.cancel_order(id=orders.id)  # 取消原有的限价单
+
+            await postToTrading(symbol, action, quantity, trade_client, unfilledPrice, orderid)
             break
-        if STATUS in ["CLOSING", "NOT_YET_OPEN", "MARKET_CLOSED",
-                      "EARLY_CLOSED"]:  # 盘后结束 没改成，收盘了  之后使用GTC 更改逻辑为内循环检查开盘状态 开盘后重新进入post hour订单大循环
+        if STATUS in ["CLOSING", "NOT_YET_OPEN", "MARKET_CLOSED", "EARLY_CLOSED"]:
             logging.warning("[交易时间超出当日交易时段]已经挂起订单|%s|等待盘前后继续交易,标的: %s|方向: %s|",
                             orderid,
                             orders.contract.symbol,
@@ -833,6 +846,7 @@ async def postHourTradesHandling(trade_client, orders, unfilledPrice, orderid):
             await asyncio.sleep(28800)
 
     logging.warning("|%s|超过盘后改单次数最大限制, %s", orderid, orders)
+    # 盘后结束 没改成，收盘了 之后使用GTC 更改逻辑为内循环检查开盘状态 开盘后重新进入post hour订单大循环
 
 
 async def order_filled(orders, unfilledPrice, orderid):
@@ -915,9 +929,9 @@ async def order_filled(orders, unfilledPrice, orderid):
                 return
             return
 
-        elif order_status.get(orders.id, None) in [OrderStatus.CANCELLED, OrderStatus.EXPIRED,
-                                                   OrderStatus.REJECTED]:
-            logging.warning("[|%s|出错]%s", orderid, orders)
+        elif ((order_status.get(orders.id, None) in [OrderStatus.CANCELLED, OrderStatus.EXPIRED, OrderStatus.REJECTED]) and (
+                      orders.reason not in ['改单成功', '', 'Change order succeeded', None, str(orders.contract.symbol)])):
+            logging.warning("======|%s|出错%s", orderid, orders)
             if orders.id in order_status:
                 del order_status[orders.id]
             return
@@ -926,25 +940,25 @@ async def order_filled(orders, unfilledPrice, orderid):
             i += 1
 
 
-async def postToTrading(orders, trade_client, unfilledPrice, orderid):
+async def postToTrading(symbol, action, quantity, trade_client, unfilledPrice, orderid):
     logging.info("|%s|从post进入trading，订单类型改变中", orderid)
-    order = market_order(account=client_config.account, contract=orders.contract, action=orders.action,
-                         quantity=orders.quantity)
-    trade_client.cancel_order(id=orders.id)  # 取消原有的限价单
+    contract = stock_contract(symbol=symbol, currency='USD')
+    order = market_order(account=client_config.account, contract=contract, action=action, quantity=quantity)
     orders = trade_client.place_order(order)
+    order_status[orders.id] = orders.status
+    logging.warning("●|%s|盘后转变重新下单成功", str(orderid).center(4))
     await asyncio.sleep(10)
     while True:
         if order_status.get(orders.id, None) == OrderStatus.FILLED:
             await order_filled(orders, unfilledPrice, orderid)
-        elif order_status.get(orders.id, None) == OrderStatus.CANCELLED:
+        elif ((order_status.get(orders.id, None) in [OrderStatus.CANCELLED, OrderStatus.EXPIRED, OrderStatus.REJECTED]) and (
+                      orders.reason not in ['改单成功', '', 'Change order succeeded', None, str(orders.contract.symbol)])):
             logging.warning("|%s|订单出现问题", orderid)
             return
         else:
             await asyncio.sleep(5)  # 等到成交为止
 
-
 # ------------------------------------------------------------ CSV算法 / 邮件功能 --------------------------------------------------------------------------------------------------------#
-
 '''
 查错机制 & 各文件解释：
 TV端 -> 检查真实信号原
@@ -1110,7 +1124,7 @@ def remove_json():
 if __name__ == "__main__":
     time_T = str(time.strftime('%y-%m-%d|%H:%M', time.localtime())) + '.log'
     logger = logging.getLogger()
-    logger.setLevel(logging.WARN)
+    logger.setLevel(logging.INFO)
 
     fh = RotatingFileHandler(time_T, maxBytes=1 * 1024 * 1024, backupCount=7)  # 最大1MB，备份7个
     formatter = logging.Formatter('%(asctime)s-%(message)s', datefmt='%D %H:%M:%S')
