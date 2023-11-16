@@ -831,12 +831,12 @@ async def postHourTradesHandling(trade_client, orders, unfilledPrice, orderid):
                     continue
 
         if STATUS == "TRADING":  # 盘前 没改成， 开盘了
-            symbol = orders.contract
+            contract = orders.contract
             action = orders.action
             quantity = orders.quantity
             trade_client.cancel_order(id=orders.id)  # 取消原有的限价单
 
-            await postToTrading(symbol, action, quantity, trade_client, unfilledPrice, orderid)
+            await postToTrading(contract, action, quantity, trade_client, unfilledPrice, orderid)
             break
         if STATUS in ["CLOSING", "NOT_YET_OPEN", "MARKET_CLOSED", "EARLY_CLOSED"]:
             logging.warning("[交易时间超出当日交易时段]已经挂起订单|%s|等待盘前后继续交易,标的: %s|方向: %s|",
@@ -940,9 +940,8 @@ async def order_filled(orders, unfilledPrice, orderid):
             i += 1
 
 
-async def postToTrading(symbol, action, quantity, trade_client, unfilledPrice, orderid):
+async def postToTrading(contract, action, quantity, trade_client, unfilledPrice, orderid):
     logging.info("|%s|从post进入trading，订单类型改变中", orderid)
-    contract = stock_contract(symbol=symbol, currency='USD')
     order = market_order(account=client_config.account, contract=contract, action=action, quantity=quantity)
     orders = trade_client.place_order(order)
     order_status[orders.id] = orders.status
@@ -1063,9 +1062,12 @@ async def csv_visualize_data(record):
 
             if not buy_price:
                 return
+            profit_percentage_with_commission = (((s1 - buy_price) * 0.5 + (s2 - buy_price) * 0.3 + (
+                    s3 - buy_price) * 0.2) - _commission) / buy_price
             profit_percentage = ((s1 - buy_price) * 0.5 + (s2 - buy_price) * 0.3 + (
                     s3 - buy_price) * 0.2) / buy_price
             profit_percentage_str = "{:.6f}%".format(profit_percentage * 100)
+            profit_percentage_with_commission_str = "{:.6f}%".format(profit_percentage_with_commission * 100)
             pnl = profit_percentage * (buy_price * _quantity) - _commission
             pnl_str = "${:.2f}".format(pnl)
             init_total_price = buy_price * _quantity
@@ -1079,6 +1081,7 @@ async def csv_visualize_data(record):
                 _quantity,  # 最初买入数量
                 init_total_price_str,  # 最初买入仓位
                 profit_percentage_str,  # pnl rate
+                profit_percentage_with_commission_str,  # pnl rate with commission
                 pnl_str,  # pnl
                 _commission_str  # 手续费
             ]
