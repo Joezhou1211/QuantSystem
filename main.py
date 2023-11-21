@@ -1015,6 +1015,7 @@ async def save_positions(positions):
 
 total_pnl = 0
 total_pnl_rate = 0
+total_commission = 0
 started_fund = NET_LIQUIDATION
 win = 0
 lose = 0
@@ -1023,7 +1024,7 @@ final_data = {}
 
 
 async def csv_visualize_data(record):
-    global total_pnl, total_pnl_rate, win, lose, win_rate, final_data
+    global total_pnl, total_pnl_rate, win, lose, win_rate, final_data, total_commission
     positions = await load_positions()
 
     ticker, action, quantity, avg_fill_price, commission, total_price, status, trade_time, _id, priceDiff, priceDiffPercentage = record
@@ -1061,7 +1062,9 @@ async def csv_visualize_data(record):
             _quantity = positions[ticker]['init_quantity']
 
             _commission = positions[ticker]['commission']
+            total_commission += _commission
             _commission_str = "${:.2f}".format(_commission)
+            total_commission_str = "${:.2f}".format(total_commission)
 
             s1, s2, s3 = positions[ticker]['sell_prices']
             s1_str = "${:.2f}".format(s1)
@@ -1107,18 +1110,22 @@ async def csv_visualize_data(record):
 
             if pnl > 0:
                 win += 1
+                win_str = str(win)
+                final_data['win'] = win_str
             if pnl < 0:
                 lose += 1
+                lose_str = str(lose)
+                final_data['lose'] = lose_str
+
             if win + lose > 0:
-                _win_rate = win / (win + lose)
-                win_rate = "{:.2f}%".format(_win_rate * 100)
+                win_rate = win / (win + lose)
+                win_rate_str = "{:.2f}%".format(win_rate * 100)
+                final_data['win_rate'] = win_rate_str
 
             # 更新 final_data 字典
-            final_data['win'] = win
-            final_data['lose'] = lose
-            final_data['win_rate'] = win_rate
             final_data['total_pnl'] = total_pnl_str
             final_data['total_pnl_rate'] = total_pnl_rate_str
+            final_data['total_commission'] = total_commission_str
 
             async with lock_visualize_record:
                 async with aiofiles.open('可视化记录.csv', 'a', newline='', encoding='utf-8') as csvfile:
