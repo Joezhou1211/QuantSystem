@@ -27,6 +27,8 @@ import os
 import smtplib
 from email.mime.text import MIMEText
 import aiofiles
+import signal
+import sys
 
 app = Flask(__name__)
 app.logger.disabled = True
@@ -54,7 +56,7 @@ my_key = os.environ.get("MY_KEY")
 mail = 'joe' + os.environ.get('Email')
 mail_password = 'ecmc' + os.environ.get('PAS')
 order_dict = {}
-Trading_Percentage = 0.0995  # 在这里修改交易比例
+Trading_Percentage = 0.2499  # 在这里修改交易比例
 
 """
 需要的更新：
@@ -1011,8 +1013,17 @@ async def save_positions(positions):
         async with aiofiles.open('持仓.json', 'w', encoding='utf-8') as f:
             await f.write(json.dumps(positions))
 
+total_pnl = 0
+total_pnl_rate = 0
+started_fund = NET_LIQUIDATION
+win = 0
+lose = 0
+win_rate = 0
+final_data = {}
+
 
 async def csv_visualize_data(record):
+    global total_pnl, total_pnl_rate, win, lose, win_rate, final_data
     positions = await load_positions()
 
     ticker, action, quantity, avg_fill_price, commission, total_price, status, trade_time, _id, priceDiff, priceDiffPercentage = record
@@ -1062,16 +1073,23 @@ async def csv_visualize_data(record):
 
             if not buy_price:
                 return
-            profit_percentage_with_commission = (((s1 - buy_price) * 0.5 + (s2 - buy_price) * 0.3 + (
-                    s3 - buy_price) * 0.2) - _commission) / buy_price
             profit_percentage = ((s1 - buy_price) * 0.5 + (s2 - buy_price) * 0.3 + (
                     s3 - buy_price) * 0.2) / buy_price
             profit_percentage_str = "{:.6f}%".format(profit_percentage * 100)
-            profit_percentage_with_commission_str = "{:.6f}%".format(profit_percentage_with_commission * 100)
             pnl = profit_percentage * (buy_price * _quantity) - _commission
+            total_pnl += pnl
+            total_pnl_rate = total_pnl / started_fund
             pnl_str = "${:.2f}".format(pnl)
+            total_pnl_str = "${:.2f}".format(total_pnl)
+            total_pnl_rate_str = "{:.2f}%".format(total_pnl_rate * 100)
+
             init_total_price = buy_price * _quantity
             init_total_price_str = "${:.2f}".format(init_total_price)
+
+            profit_percentage_with_commission = pnl / init_total_price
+            profit_percentage_with_commission_str = "{:.2f}%".format(profit_percentage_with_commission * 100)
+
+            pnl_with_commission_str = "${:.2f}".format(profit_percentage * (buy_price * _quantity))
 
             processed_data = [
                 trade_time,  # 最后一次交易时间
@@ -1079,18 +1097,55 @@ async def csv_visualize_data(record):
                 buy_price_str,  # 买入价
                 s1_str, s2_str, s3_str,  # 卖出价
                 _quantity,  # 最初买入数量
-                init_total_price_str,  # 最初买入仓位
-                profit_percentage_str,  # pnl rate
-                profit_percentage_with_commission_str,  # pnl rate with commission
-                pnl_str,  # pnl
-                _commission_str  # 手续费
+                init_total_price_str,  # 买入总价
+                profit_percentage_str,  # pnl rate无手续费
+                profit_percentage_with_commission_str,  # pnl rate有手续费
+                pnl_str,  # pnl无手续费
+                pnl_with_commission_str,  # pnl有手续费
+                _commission_str,  # 手续费
             ]
+
+            if pnl > 0:
+                win += 1
+            if pnl < 0:
+                lose += 1
+            if win + lose > 0:
+                _win_rate = win / (win + lose)
+                win_rate = "{:.2f}%".format(_win_rate * 100)
+
+            # 更新 final_data 字典
+            final_data['win'] = win
+            final_data['lose'] = lose
+            final_data['win_rate'] = win_rate
+            final_data['total_pnl'] = total_pnl_str
+            final_data['total_pnl_rate'] = total_pnl_rate_str
+
             async with lock_visualize_record:
                 async with aiofiles.open('可视化记录.csv', 'a', newline='', encoding='utf-8') as csvfile:
                     await csvfile.write(','.join(map(str, processed_data)) + '\n')
             del positions[ticker]
 
     await save_positions(positions)
+
+
+def finish_up():
+    print('执行结束操作...')
+    with open('可视化记录.csv', 'a', newline='', encoding='utf-8') as csvfile:
+        csvfile.write(','.join(final_data.keys()) + '\n')
+        values = ','.join(map(str, final_data.values())) + '\n'
+        csvfile.write(values)
+
+
+def signal_handler(sig, frame):
+    print('正在关闭程序...')
+    print(sig)
+    print(frame)
+    finish_up()
+    sys.exit(0)
+
+
+# 设置信号处理器
+signal.signal(signal.SIGINT, signal_handler)
 
 
 def send_email(ticker, action, quantity, initial_price):
