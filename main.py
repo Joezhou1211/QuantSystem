@@ -367,19 +367,50 @@ def get_client_config():
 client_config = get_client_config()
 protocol, host, port = client_config.socket_host_port
 push_client = PushClient(host, port, use_ssl=(protocol == 'ssl'), use_protobuf=True)
+trade_client_outer = TradeClient(client_config)
+portfolio_account_outer = trade_client_outer.get_prime_assets(base_currency='USD')
+LIQUIDATION = portfolio_account_outer.segments['S'].net_liquidation
 
 
-def connect_callback(frame):  # 回调接口 初始化当前Cash/总资产/持仓
-    global CASH, NET_LIQUIDATION
+def connect_callback(frame):  # 回调接口 初始化当前Cash/总资产/持仓/json
+    global CASH, NET_LIQUIDATION, POSITION
     trade_client = TradeClient(client_config)
     portfolio_account = trade_client.get_prime_assets(base_currency='USD')
     CASH = portfolio_account.segments['S'].cash_available_for_trade
     NET_LIQUIDATION = portfolio_account.segments['S'].net_liquidation
     position = trade_client.get_positions(account=client_config.account, sec_type=SecurityType.STK, currency='USD',
                                           market=Market.US)
+    local_positions = load_position()  # 读取本地持仓
+    api_symbols = set(pos.contract.symbol for pos in position)  # API 持仓中的标的
+
     if len(position) > 0:
         for pos in position:
             POSITION[pos.contract.symbol] = [pos.quantity, 0]
+            symbol = pos.contract.symbol
+            if symbol in local_positions:
+                # 检查数量是否相同，如果不相同则更新
+                if local_positions[symbol]['quantity'] != pos.quantity:
+                    local_positions[symbol]['quantity'] = pos.quantity
+                    local_positions[symbol]['init_quantity'] = pos.quantity
+            else:
+                # 如果不在 JSON 中，则添加新条目
+                local_positions[symbol] = {
+                    "buy_time": time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()),
+                    "buy_price": pos.average_cost,
+                    "sell_prices": [],
+                    "quantity": pos.quantity,
+                    "init_quantity": pos.quantity,
+                    "commission": 0
+                }
+
+        # 从 JSON 中删除不存在于 API 持仓中的持仓
+        for symbol in list(local_positions.keys()):
+            if symbol not in api_symbols:
+                del local_positions[symbol]
+
+        # 保存更新后的 JSON
+        save_position(local_positions)
+
     if frame:
         print("============================================================================")
         print('回调系统连接成功, 当前时间:', time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()), '市场状态：', STATUS)
@@ -456,6 +487,7 @@ async def check_open_order(trade_client, symbol, new_action, new_price, percenta
     因为市价单盘中无法获取实时价格，导致order对象不存在order.limit_price参数，
     在模拟中使用1分钟线会出现盘中下单过快导致和有关limit_price的操作全部异常。 -> 已解决 根据盘口创建判断条件
     """
+
     logging.info("|%s|检查重复订单中", orderid)
     open_orders = trade_client.get_open_orders(symbol=symbol)
     if not open_orders:
@@ -616,8 +648,7 @@ async def place_order(action, symbol, price, orderid, percentage=1.00):  # 盘�
                 sellingQuantity = int(math.ceil(quantity * percentage))
                 if sellingQuantity > POSITION[symbol][0] if symbol in POSITION else 0:
                     sellingQuantity = POSITION[symbol][0] if symbol in POSITION else 0
-                order = market_order(account=client_config.account, contract=contract, action=action,
-                                     quantity=sellingQuantity)
+                order = market_order(account=client_config.account, contract=contract, action=action, quantity=sellingQuantity)
 
             else:
                 print("[盘中] 交易失败，当前没有", symbol, "的持仓")
@@ -653,7 +684,7 @@ async def place_order(action, symbol, price, orderid, percentage=1.00):  # 盘�
         if action == "BUY" and CASH >= max_buy:
             order = limit_order(account=client_config.account, contract=contract, action=action,
                                 quantity=max_quantity,
-                                limit_price=round(price, 2))
+                                limit_price=round(price, 2))  # , time_in_force='GTC'
 
         if action == "BUY" and CASH < max_buy:
             logging.info("|%s|买入 %s 失败，现金不足", orderid, symbol)
@@ -673,7 +704,7 @@ async def place_order(action, symbol, price, orderid, percentage=1.00):  # 盘�
                     sellingQuantity = POSITION[symbol][0] if symbol in POSITION else 0
                 order = limit_order(account=client_config.account, contract=contract, action=action,
                                     quantity=sellingQuantity,
-                                    limit_price=round(price * 0.99995, 2))  # 实盘增加time_in_force = 'GTC'
+                                    limit_price=round(price * 0.99995, 2))  # ,time_in_force='GTC'
 
             else:
                 print("[盘后] 交易失败，当前没有", symbol, "的持仓")
@@ -736,18 +767,18 @@ async def postHourTradesHandling(trade_client, orders, unfilledPrice, orderid):
     """
     增加一个算法 基于前一分钟的成交量判断休眠时常
     写一个线性算法 如果：
-        前一分钟成交量小于当前下单量 -> 休眠⬇ 越小休眠越长 以现在为上限
-        前一分钟成交量大于当前下单量 -> 休眠⬆ 越大休眠越短 最短3s
-
+        前一分钟成交量小于order.quantity -> 休眠⬇  i.e. 成交越小休眠越长 以现在为上限
+        前一分钟成交量大于order.quantity -> 休眠⬆ i.e. 成交越大休眠越短 最短3s
     """
     global POSITION, SYMBOLS
     logging.info("|%s|进行盘后交易循环", orderid)
     trade_attempts = 2
     initial_price = orders.limit_price
     checker = 0
-    i = 0
     orderid_str = str(orderid).center(4)
-    while i < 300:
+    first_time_check = True
+
+    while True:
         quantity = await check_position(orders)
         # logging.info("|%s|check point 1", orderid)
         if not quantity:
@@ -788,8 +819,8 @@ async def postHourTradesHandling(trade_client, orders, unfilledPrice, orderid):
                             return
                         await asyncio.sleep(10)  # 如果价格没变化 继续等 如果变化了才重新下单
                         # logging.info("|%s|check point 4.4", orderid)
-                        i += 1
                         continue
+
                     else:
                         if (oldPrice - price) / oldPrice >= 0.2 and volume >= 1000:
                             price = round(price * 0.992, 2)  # 极端情况改单
@@ -813,7 +844,6 @@ async def postHourTradesHandling(trade_client, orders, unfilledPrice, orderid):
                         # logging.info("|%s|check point 5, 休眠20s", orderid)
                         await asyncio.sleep(20)
                         orders = trade_client.get_order(id=orders.id)
-                        i += 1
                         continue
                 else:
                     # logging.info("|%s|check point 5.1", orderid)
@@ -823,40 +853,39 @@ async def postHourTradesHandling(trade_client, orders, unfilledPrice, orderid):
                         # logging.info("|%s|自动改单失败，当前标价格还未更新", orderid)
                         await asyncio.sleep(30)
                         # logging.info("|%s|check point 5.3", orderid)
-                        i += 1
                         continue
                     # symbol_list = list(SYMBOLS.keys())
                     # logging.info("|%s|自动改单报错，SYMBOLS：%s 不存在当前标的: %s,", orderid, symbol_list, symbol)
                     await asyncio.sleep(30)
                     # logging.info("|%s|check point 5.4", orderid)
-                    i += 1
                     continue
 
         if STATUS == "TRADING":  # 盘前 没改成， 开盘了
             contract = orders.contract
             action = orders.action
-            quantity = orders.quantity
+            quantity = orders.remaining
             trade_client.cancel_order(id=orders.id)  # 取消原有的限价单
-
             await postToTrading(contract, action, quantity, trade_client, unfilledPrice, orderid)
             break
         if STATUS in ["CLOSING", "NOT_YET_OPEN", "MARKET_CLOSED", "EARLY_CLOSED"]:
-            logging.warning("[交易时间超出当日交易时段]已经挂起订单|%s|等待盘前后继续交易,标的: %s|方向: %s|",
-                            orderid,
-                            orders.contract.symbol,
-                            orders.action)
-            await asyncio.sleep(28800)
-
-    logging.warning("|%s|超过盘后改单次数最大限制, %s", orderid, orders)
-    # 盘后结束 没改成，收盘了 之后使用GTC 更改逻辑为内循环检查开盘状态 开盘后重新进入post hour订单大循环
+            if not first_time_check:
+                await asyncio.sleep(10)
+            if first_time_check:
+                logging.warning("[交易时间超出当日交易时段]已经挂起订单|%s|等待盘前后继续交易,标的: %s|方向: %s|",
+                                orderid,
+                                orders.contract.symbol,
+                                orders.action)
+                await asyncio.sleep(28700)
+                first_time_check = False
+            continue
 
 
 async def order_filled(orders, unfilledPrice, orderid):
     """
-    应该创建一个逻辑流 所有订单都永久挂单 直到成交
+    应该创建一个逻辑流 所有订单都永久挂单 直到成交 -> GTC 实盘完成
     针对盘中不成交处理 如果没有办法成交则在盘后用实时价格转为限价单 (待处理)
-    is_trading_hour = STATUS == "TRADING"
     """
+
     logging.info("|%s|交易进入结束环节", orderid)
     priceDiff = None
     priceDiffPercentage = None
@@ -925,14 +954,17 @@ async def order_filled(orders, unfilledPrice, orderid):
             if orders.id in order_status:
                 del order_status[orders.id]
             if orders.contract.symbol in POSITION:
-                if orders.quantity == POSITION[orders.contract.symbol][0] == POSITION[orders.contract.symbol][1] and orders.action == 'SELL':
+                if orders.quantity == POSITION[orders.contract.symbol][0] == POSITION[orders.contract.symbol][1] and \
+                        orders.action == 'SELL':
                     del POSITION[orders.contract.symbol]
                 logging.info("=========================|%s|订单已结束=========================\r\n", orderid)
                 return
             return
 
-        elif ((order_status.get(orders.id, None) in [OrderStatus.CANCELLED, OrderStatus.EXPIRED, OrderStatus.REJECTED]) and (
-                      orders.reason not in ['改单成功', '', 'Change order succeeded', None, str(orders.contract.symbol)])):
+        elif ((order_status.get(orders.id, None) in [OrderStatus.CANCELLED, OrderStatus.EXPIRED,
+                                                     OrderStatus.REJECTED]) and (
+                      orders.reason not in ['改单成功', '', 'Change order succeeded', None,
+                                            str(orders.contract.symbol)])):
             logging.warning("======|%s|出错%s", orderid, orders)
             if orders.id in order_status:
                 del order_status[orders.id]
@@ -952,12 +984,15 @@ async def postToTrading(contract, action, quantity, trade_client, unfilledPrice,
     while True:
         if order_status.get(orders.id, None) == OrderStatus.FILLED:
             await order_filled(orders, unfilledPrice, orderid)
-        elif ((order_status.get(orders.id, None) in [OrderStatus.CANCELLED, OrderStatus.EXPIRED, OrderStatus.REJECTED]) and (
-                      orders.reason not in ['改单成功', '', 'Change order succeeded', None, str(orders.contract.symbol)])):
+        elif ((order_status.get(orders.id, None) in [OrderStatus.CANCELLED, OrderStatus.EXPIRED,
+                                                     OrderStatus.REJECTED]) and (
+                      orders.reason not in ['改单成功', '', 'Change order succeeded', None,
+                                            str(orders.contract.symbol)])):
             logging.warning("|%s|订单出现问题", orderid)
             return
         else:
             await asyncio.sleep(5)  # 等到成交为止
+
 
 # ------------------------------------------------------------ CSV算法 / 邮件功能 --------------------------------------------------------------------------------------------------------#
 '''
@@ -1013,10 +1048,25 @@ async def save_positions(positions):
         async with aiofiles.open('持仓.json', 'w', encoding='utf-8') as f:
             await f.write(json.dumps(positions))
 
+
+def load_position():
+    try:
+        with open('持仓.json', 'r', encoding='utf-8') as f:
+            data = f.read()
+            return json.loads(data)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def save_position(positions):
+    with open('持仓.json', 'w', encoding='utf-8') as f:
+        f.write(json.dumps(positions))
+
+
 total_pnl = 0
 total_pnl_rate = 0
 total_commission = 0
-started_fund = NET_LIQUIDATION
+started_fund = LIQUIDATION
 win = 0
 lose = 0
 win_rate = 0
@@ -1053,8 +1103,11 @@ async def csv_visualize_data(record):
         positions[ticker]['quantity'] -= quantity
         positions[ticker]['commission'] += commission
 
-        if positions[ticker]['quantity'] <= 0 < positions[ticker]['buy_price'] or len(
-                positions[ticker]['sell_prices']) == 3:
+        if positions[ticker]['quantity'] < 0:
+            del positions[ticker]
+            return
+
+        elif positions[ticker]['quantity'] == 0 or len(positions[ticker]['sell_prices']) == 3:
             last_sell_price = positions[ticker]['sell_prices'][-1]
             while len(positions[ticker]['sell_prices']) < 3:
                 positions[ticker]['sell_prices'].append(last_sell_price)
@@ -1135,18 +1188,25 @@ async def csv_visualize_data(record):
     await save_positions(positions)
 
 
+is_finished = False
+
+
 def finish_up():
-    print('执行结束操作...')
-    with open('可视化记录.csv', 'a', newline='', encoding='utf-8') as csvfile:
-        csvfile.write(','.join(final_data.keys()) + '\n')
-        values = ','.join(map(str, final_data.values())) + '\n'
-        csvfile.write(values)
+    global is_finished
+    if not is_finished:
+        print('\n\r执行结束操作......')
+        with open('可视化记录.csv', 'a', newline='', encoding='utf-8') as csvfile:
+            csvfile.write(','.join(final_data.keys()) + '\n')
+            values = ','.join(map(str, final_data.values())) + '\n'
+            csvfile.write(values)
+            print('文件写入完成!')
+        is_finished = True
+        return
+    elif is_finished:
+        print('\n\r正在关闭程序......')
 
 
 def signal_handler(sig, frame):
-    print('正在关闭程序...')
-    print(sig)
-    print(frame)
     finish_up()
     sys.exit(0)
 
@@ -1175,17 +1235,6 @@ def send_email(ticker, action, quantity, initial_price):
         logging.warning('邮件发送失败: %s', e)
 
 
-def remove_json():
-    print("----------------------------------------------------------------------------")
-    file_path = '持仓.json'
-    if os.path.isfile(file_path):
-        try:
-            os.remove(file_path)
-            print(f" * 已删除文件 <{file_path}> ")
-        except Exception as e:
-            print(f"无法删除文件 {file_path}。原因：{e}")
-
-
 if __name__ == "__main__":
     time_T = str(time.strftime('%y-%m-%d|%H:%M', time.localtime())) + '.log'
     logger = logging.getLogger()
@@ -1196,7 +1245,7 @@ if __name__ == "__main__":
     fh.setFormatter(formatter)
 
     logger.addHandler(fh)
-    remove_json()
+    print("----------------------------------------------------------------------------")
 
     thread = Thread(target=run_asyncio_loop)
     thread.start()
