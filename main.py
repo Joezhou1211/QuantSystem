@@ -29,6 +29,7 @@ from email.mime.text import MIMEText
 import aiofiles
 import signal
 import sys
+from tigeropen.common.util.signature_utils import read_private_key
 
 app = Flask(__name__)
 app.logger.disabled = True
@@ -52,16 +53,15 @@ lock_positions_json = asyncio.Lock()
 lock_visualize_record = asyncio.Lock()
 lock_priceAndVolume = asyncio.Lock()
 
-my_key = os.environ.get("MY_KEY")
 mail = 'joe' + os.environ.get('Email')
 mail_password = 'ecmc' + os.environ.get('PAS')
 order_dict = {}
-Trading_Percentage = 0.2499  # 在这里修改交易比例
+Trading_Percentage = 0.3325  # 在这里修改交易比例
 
 """
 需要的更新：
-    1. 将LMT更新为永久GTC 
-    2. 将现有订单升级为Queue base的排序系统
+    1. 将LMT更新为永久GTC   -> 已完成
+    2. 将现有订单升级为Queue base的排序系统  -> 已完成
 
 待处理的问题：
     1. 并发数据同时进入function 无法处理 需要线程排布 -> 更改获取盘口的方式 v2 已修复 
@@ -357,9 +357,9 @@ async def priceAndVolume(symbol, price, volume):
 
 def get_client_config():
     client_configs = TigerOpenClientConfig()
-    client_configs.private_key = my_key
+    client_configs.private_key = read_private_key('/home/admin/mykey.pem')
     client_configs.tiger_id = '20152364'
-    client_configs.account = '20230418022309393'
+    client_configs.account = '55414668'  # 模拟 20230418022309393
     client_configs.language = Language.zh_CN
     return client_configs
 
@@ -684,7 +684,7 @@ async def place_order(action, symbol, price, orderid, percentage=1.00):  # 盘�
         if action == "BUY" and CASH >= max_buy:
             order = limit_order(account=client_config.account, contract=contract, action=action,
                                 quantity=max_quantity,
-                                limit_price=round(price, 2))  # , time_in_force='GTC'
+                                limit_price=round(price, 2), time_in_force='GTC')  # , time_in_force='GTC'
 
         if action == "BUY" and CASH < max_buy:
             logging.info("|%s|买入 %s 失败，现金不足", orderid, symbol)
@@ -704,7 +704,7 @@ async def place_order(action, symbol, price, orderid, percentage=1.00):  # 盘�
                     sellingQuantity = POSITION[symbol][0] if symbol in POSITION else 0
                 order = limit_order(account=client_config.account, contract=contract, action=action,
                                     quantity=sellingQuantity,
-                                    limit_price=round(price * 0.99995, 2))  # ,time_in_force='GTC'
+                                    limit_price=round(price * 0.99995, 2), time_in_force='GTC')  # ,time_in_force='GTC'
 
             else:
                 print("[盘后] 交易失败，当前没有", symbol, "的持仓")
@@ -979,7 +979,7 @@ async def postToTrading(contract, action, quantity, trade_client, unfilledPrice,
     order = market_order(account=client_config.account, contract=contract, action=action, quantity=quantity)
     orders = trade_client.place_order(order)
     order_status[orders.id] = orders.status
-    logging.warning("●|%s|盘后转变重新下单成功", str(orderid).center(4))
+    logging.warning("●|%s|盘前->开盘 重新下单成功", str(orderid).center(4))
     await asyncio.sleep(10)
     while True:
         if order_status.get(orders.id, None) == OrderStatus.FILLED:
@@ -1245,6 +1245,7 @@ if __name__ == "__main__":
     fh.setFormatter(formatter)
 
     logger.addHandler(fh)
+    print("系统启动中...")
     print("----------------------------------------------------------------------------")
 
     thread = Thread(target=run_asyncio_loop)
