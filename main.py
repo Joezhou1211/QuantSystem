@@ -684,7 +684,8 @@ async def place_order(action, symbol, price, orderid, percentage=1.00):  # 盘�
         if action == "BUY" and CASH >= max_buy:
             order = limit_order(account=client_config.account, contract=contract, action=action,
                                 quantity=max_quantity,
-                                limit_price=round(price, 2), time_in_force='GTC')  # , time_in_force='GTC'
+                                limit_price=round(price, 2))
+            order.time_in_force = 'GTC'
 
         if action == "BUY" and CASH < max_buy:
             logging.info("|%s|买入 %s 失败，现金不足", orderid, symbol)
@@ -704,7 +705,8 @@ async def place_order(action, symbol, price, orderid, percentage=1.00):  # 盘�
                     sellingQuantity = POSITION[symbol][0] if symbol in POSITION else 0
                 order = limit_order(account=client_config.account, contract=contract, action=action,
                                     quantity=sellingQuantity,
-                                    limit_price=round(price * 0.99995, 2), time_in_force='GTC')  # ,time_in_force='GTC'
+                                    limit_price=round(price * 0.99995, 2))
+                order.time_in_force = 'GTC'
 
             else:
                 print("[盘后] 交易失败，当前没有", symbol, "的持仓")
