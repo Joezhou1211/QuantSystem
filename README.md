@@ -35,8 +35,8 @@ Python 3.7+
 ```
 ## 安装
 ```
-git clone https://github.com/yourusername/quantitative-trading-system.git
-cd quantitative-trading-system
+git clone https://github.com/Joezhou1211/QuantSystem.git
+cd QuantSystem
 ```
 ## 设置TigerOpen API
 
