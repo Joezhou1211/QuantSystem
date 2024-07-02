@@ -31,6 +31,7 @@ import signal
 import sys
 from tigeropen.common.util.signature_utils import read_private_key
 
+
 app = Flask(__name__)
 app.logger.disabled = True
 log = logging.getLogger('werkzeug')
@@ -53,8 +54,8 @@ lock_positions_json = asyncio.Lock()
 lock_visualize_record = asyncio.Lock()
 lock_priceAndVolume = asyncio.Lock()
 
-mail = 'joe' + os.environ.get('Email')
-mail_password = 'ecmc' + os.environ.get('PAS')
+mail = 'mail'
+mail_password = 'password'
 order_dict = {}
 Trading_Percentage = 0.3325  # 在这里修改交易比例
 
@@ -126,6 +127,7 @@ def is_daylight_saving():  # 检查夏令时
     tz = pytz.timezone('America/New_York')
     now = datetime.datetime.now(tz)
     return now.dst() != datetime.timedelta(0)
+
 
 
 async def set_market_status_winter_time():
@@ -358,8 +360,8 @@ async def priceAndVolume(symbol, price, volume):
 def get_client_config():
     client_configs = TigerOpenClientConfig()
     client_configs.private_key = read_private_key('/home/admin/mykey.pem')
-    client_configs.tiger_id = '20152364'
-    client_configs.account = '55414668'  # 模拟 20230418022309393
+    client_configs.tiger_id = '0123456'
+    client_configs.account = '0123456'  
     client_configs.language = Language.zh_CN
     return client_configs
 
@@ -1255,4 +1257,4 @@ if __name__ == "__main__":
 
     push_client.connect_callback = connect_callback
     start_listening()
-    app.run('0.0.0.0', 80)
+    app.run('0.0.0.0', 8080)
