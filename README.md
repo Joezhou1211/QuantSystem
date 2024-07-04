@@ -44,8 +44,8 @@ cd QuantSystem
 
 将私钥放置在适当的目录（如/home/admin/key.pem）
 
-![IMG_5892](https://github.com/Joezhou1211/QuantSystem/assets/121386280/1788d333-5814-4028-9659-d51f3ab9c0b9)
+<img src="https://github.com/Joezhou1211/QuantSystem/assets/121386280/1788d333-5814-4028-9659-d51f3ab9c0b9" width="330">
 
-![IMG_5893](https://github.com/Joezhou1211/QuantSystem/assets/121386280/ce2e1943-d2a8-4c08-bd47-842ae9f9b9db)
+<img src="https://github.com/Joezhou1211/QuantSystem/assets/121386280/ce2e1943-d2a8-4c08-bd47-842ae9f9b9db" width="330">
 
 
