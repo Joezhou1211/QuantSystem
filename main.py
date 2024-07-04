@@ -768,12 +768,6 @@ async def check_position(orders):
 
 
 async def postHourTradesHandling(trade_client, orders, unfilledPrice, orderid):
-    """
-    增加一个算法 基于前一分钟的成交量判断休眠时常
-    写一个线性算法 如果：
-        前一分钟成交量小于order.quantity -> 休眠⬇  i.e. 成交越小休眠越长 以现在为上限
-        前一分钟成交量大于order.quantity -> 休眠⬆ i.e. 成交越大休眠越短 最短3s
-    """
     global POSITION, SYMBOLS
     logging.info("|%s|进行盘后交易循环", orderid)
     trade_attempts = 2
@@ -886,8 +880,7 @@ async def postHourTradesHandling(trade_client, orders, unfilledPrice, orderid):
 
 async def order_filled(orders, unfilledPrice, orderid):
     """
-    应该创建一个逻辑流 所有订单都永久挂单 直到成交 -> GTC 实盘完成
-    针对盘中不成交处理 如果没有办法成交则在盘后用实时价格转为限价单 (待处理)
+    创建逻辑流 所有订单都永久挂单 直到成交 -> GTC 实盘完成
     """
 
     logging.info("|%s|交易进入结束环节", orderid)
