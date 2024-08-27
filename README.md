@@ -4,7 +4,7 @@
 This is a quantitative trading system implemented in Python. The system is based on the TigerOpen API and executes buy and sell orders as well as updates local data by receiving trading signals from TradingView. To run this system, it needs to be deployed on a server.
 
 ## Notes
-
+- Comments in codes was written by Simplified Chinese. No english version available sorry :(
 - The author has not purchased Tiger's real-time data, so the system cannot detect pre-market and post-market statuses. However, a workaround method has been implemented to determine trading status based on server time, with checks every 5 minutes. This might need recalibration depending on daylight saving time adjustments.
 - The same issue applies: without real-time data, the method to obtain real-time prices for order modification is to use TradingView to send price signals every minute. TradingView sends the monitored price changes via webhook every minute. For basic paid users, up to 20 trading signals and 20 price signals can be created simultaneously. This means the system can automatically trade up to 20 stocks at once.
 - This project was written by the author during their freshman year as a learning project. Although the system has undergone 6 months of stress testing and it's 99.9% certain that intraday trading will not encounter issues, if it's intended for production use, ensure to check all details and understand the definition of every function and variable.
