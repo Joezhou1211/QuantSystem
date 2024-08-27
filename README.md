@@ -1,3 +1,55 @@
+# English
+# Quantitative System
+
+This is a quantitative trading system implemented in Python. The system is based on the TigerOpen API and executes buy and sell orders as well as updates local data by receiving trading signals from TradingView. To run this system, it needs to be deployed on a server.
+
+## Notes
+
+- The author has not purchased Tiger's real-time data, so the system cannot detect pre-market and post-market statuses. However, a workaround method has been implemented to determine trading status based on server time, with checks every 5 minutes. This might need recalibration depending on daylight saving time adjustments.
+- The same issue applies: without real-time data, the method to obtain real-time prices for order modification is to use TradingView to send price signals every minute. TradingView sends the monitored price changes via webhook every minute. For basic paid users, up to 20 trading signals and 20 price signals can be created simultaneously. This means the system can automatically trade up to 20 stocks at once.
+- This project was written by the author during their freshman year as a learning project. Although the system has undergone 6 months of stress testing and it's 99.9% certain that intraday trading will not encounter issues, if it's intended for production use, ensure to check all details and understand the definition of every function and variable.
+- Currently, the author is developing a semi-automated Python graphical trading system for intraday trading. Features include fractal identification, preset pattern stock selection, automatic price tracking, real-time news monitoring, and large model-based decision-making suggestions.
+
+## System Features
+
+- **Low to Medium Frequency Trading:** Supports minute-level trading with automated order placement, modification, and cancellation. Issues may arise when the frequency exceeds one trade per minute. Python does not support concurrency; for high-frequency trading, other coding options should be considered.
+- **Optimal Deployment Location:** It is recommended to deploy the server near Washington, D.C., to optimize latency for U.S. stock trading.
+- **Flexible Integration:** If you wish to bypass TradingView, consider using vector bt or other open-source frameworks for strategy and backtesting, but ensure real-time data issues are properly addressed.
+- **Automation:** The system supports automated order placement, modification, cancellation, monitoring, and notifications. Current features include after-hours trading, and order modifications based on volume. If after-hours trading is not needed, you can disable this function by modifying the `place_order` function.
+
+## Functionality
+
+- **Market State Management:** Automatically updates market status, accounting for daylight saving and standard time.
+- **Order Management:** Handles concurrent data, manages order queues, ensuring correct order execution and modification.
+- **Real-Time Data Processing:** Integrates TigerOpen API for real-time market data and order status updates.
+- **Logging and Email Notifications:** Detailed logging and email notifications for critical events.
+- **CSV Recording:** Logs all trades and positions into a CSV file for analysis and visualization.
+
+## Prerequisites
+```
+Python 3.7+
+Required Libraries: Flask, asyncio, logging, aiofiles, pytz, smtplib, TigerOpen API SDK
+```
+
+## Installation
+
+```bash
+git clone https://github.com/Joezhou1211/QuantSystem.git
+cd QuantSystem
+```
+
+##  Setting Up TigerOpen API
+
+Obtain the private key from Tiger Quant:  https://quant.itigerup.com/openapi/en/python/overview/introduction.html
+
+Place the private key in the appropriate directory (e.g., /home/admin/key.pem).
+
+## App Screen Shot (In Chinese only)
+<img src="https://github.com/Joezhou1211/QuantSystem/assets/121386280/1788d333-5814-4028-9659-d51f3ab9c0b9" width="400">
+
+<img src="https://github.com/Joezhou1211/QuantSystem/assets/121386280/ce2e1943-d2a8-4c08-bd47-842ae9f9b9db" width="600">
+
+# Simplified Chinese
 # 量化系统
 这是一个量化交易系统，使用Python实现。该系统基于TigerOpen API，通过接收Tradingview传递的交易信号来执行买卖单和更新本地数据。运行该系统需要挂载该文件在服务器中。
 
